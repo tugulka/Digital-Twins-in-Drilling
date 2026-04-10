@@ -1,0 +1,73 @@
+--- Page 1 ---
+UYGULAMA PROJESİ ÖNERİ FORMU 
+ 
+Projenin Adı 
+Dijital İkizler Yöntemi ile Sürekli Reoloji ve Basınç Takibi 
+ 
+Geliştirme Ortamı 
+Programlama Dili Veritabanı İşletim Sistemi 
+Python SQL Windows, Linux 
+ 
+Proje Ekibi 
+Numarası Adı Soyadı Projedeki Görevi 
+232131006 Tolga AKGÖL 
+Proje Sorumlusu, Analiz, 
+Tasarım, Gerçekleştirim, 
+Test 
+   
+   
+ 
+Proje Kapsamı, Detaylı Açıklama, Teslim Edilecekler 
+Petrol/doğalgaz/jeotermal kuyu sondajı kapsamında kullanılan sondaj 
+sıvısının (sondaj çamuru) reolojik parametrelerinin takibi hem kuyu içi 
+stabiliteyi hem de pompa ve standpipe basıncının kontrolü ve takibi için 
+önemlidir.  
+Elimizde sondaj esnasında kullanılan matkap nozul büyüklüğü, sondaj dizisi, 
+çamur debisi ve kuyu çapı verileri elimizde olacaktır.  
+Hazırlanacak olan dijital ikizler 6 farklı yerden sensörler veri gönderecektir: 
+- İlerleme hızı (Rate of Penetration-ROP) Göstergesi: 
+o İlerleme hızını göstererek oluşan yeni hacmin sistemde tekrar 
+hesaplanmasını sağlayacaktır. 
+- Tank seviye sensörü 
+o Anlık çamur seviyesi yüksekliği (Azalma hızı ve toplam 
+kullanılabilir tank hacmi) 
+- Akış Ölçer 
+o Anlık çamur debisinin akış hızı 
+- Pompa basınç sensörü 
+o Pompa üzerinde okunan anlık basınç değeri 
+- Standpipe basıncı 
+o Rotary masası üzerinde okunan anlık basınç değeri 
+- Çamur Inline Reometresi 
+o Çamur sıcaklığı 
+o Çamur akma gerilmesi  
+o Kıvam indeksi 
+o Akış Davranış İndeksi 
+Bu sayede elimizdeki kapalı devre çamur sirkülasyon sistemi sayesinde şu 
+sorular sorulabilecektir: 
+- Çamur reolojik özelliği değiştirilmek istendiğinde ne kadar çamur 
+gerekecektir? Tank içinde yeteri kadar boş hacim mevcut mudur? 
+- Tank boşalma hızı ile ilerleme hızı durumu (Kuyudan geliş olması, kaçak 
+olması) 
+- Çamura yapılmak istenen müdahale sonucunda ne kadarlık bir basınç 
+değişikliği beklenmektedir? 
+--- Page 2 ---
+- Kuyu çapı veya matkap nozul çapları değiştirildiğinde beklenen basınç 
+değişikliği nasıl olacaktır? 
+- Arttırılan debi ile beklenen basınç değişikliği nasıl olacaktır? 
+İşlenen veriler SQL verisi olarak kaydedilecektir. Bu sensörler şu an sondaj 
+şartlarında mevcut olmadığından mock veriler hazırlanacaktır. 
+ 
+Proje Aşamaları ve Önerilen Takvim Bilgisi 
+Çalışma Planlanan Başlangıç Tarihi Planlanan Bitiş Tarihi 
+Analiz Çalışması 11.03.2026 31.03.2026 
+Tasarım Çalışması 01.04.2026 15.04.2026 
+Gerçekleştirim Çalışması 16.04.2026 05.05.2026 
+Test Çalışması (*) 06.05.2026 15.05.2026 
+Danışman Teslimi (**) 16.05.2026 26.05.2026 
+Projenin Sunumu (***) 16.05.2026 26.05.2026 
+ 
+ 
+(*) Test çalışması, t est planının kesinleştirilmesi, testin tamamlanması, raporun teslimini 
+içermektedir. 
+(**) Danışmana projenin teslimi, belirtilen tarihler arasında muhakkak yapılacaktır.  
+(***) Proje sunumu, belirtilen tarihler arasında muhakkak yapılacaktır.  
