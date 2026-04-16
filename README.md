@@ -64,4 +64,4 @@ Vite'ın terminale yazdığı URL'yi açın (genellikle **http://localhost:5173*
 
 ## Lisans
 
-Bu depoyu herkese açık yayımlayacaksanız bir lisans dosyası ekleyin.
+Bu proje **GNU General Public License v3.0 (GNU GPLv3)** ile lisanslanmıştır.
