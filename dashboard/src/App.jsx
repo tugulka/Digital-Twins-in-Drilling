@@ -507,6 +507,10 @@ function App() {
   const [selectedUnitParam, setSelectedUnitParam] = useState('rop');
 
   const SENSORS = getSensorsConfig(units, lang);
+  const currentDepthValue =
+    globalLatest?.Current_Depth_m !== undefined
+      ? parseFloat(convertValue(globalLatest.Current_Depth_m, 'depth', units).toFixed(1))
+      : null;
 
   // Define layout structures strictly
   const topSensors = [
@@ -648,11 +652,9 @@ function App() {
             >
                <span>👇 {lang === 'TR' ? 'TOPLAM DERİNLİK:' : 'TOTAL DEPTH:'}</span>
                <span style={{ marginLeft: '0.8rem', fontWeight: 'bold', fontSize: '2rem', textShadow: '0 0 10px rgba(56, 189, 248, 0.8)' }}>
-                  {chartData.length > 0 && chartData[chartData.length-1]?.Current_Depth_m !== undefined 
-                      ? (units.depth === 'ft' 
-                          ? (chartData[chartData.length-1].Current_Depth_m * 3.28084).toFixed(1) + ' ft' 
-                          : chartData[chartData.length-1].Current_Depth_m.toFixed(1) + ' m') 
-                      : '0.0 ' + units.depth}
+                  {currentDepthValue !== null
+                      ? `${currentDepthValue} ${units.depth}`
+                      : `0.0 ${units.depth}`}
                </span>
             </div>
         </div>
