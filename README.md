@@ -1,49 +1,49 @@
-# Digital Twins in Drilling
+# Digital Twins in Drilling ()
 
-A small **drilling digital-twin demo**: a Python simulator writes time-series sensor data to SQLite, a **FastAPI** service exposes it over HTTP, and a **React (Vite)** dashboard visualizes pressures, flow, rheology, and configurable wellbore/BHA parameters. The UI supports **Turkish and English** labels and several engineering unit choices.
+Küçük bir **sondaj dijital ikiz demosu**: Python tabanlı bir simülatör zaman serisi sensör verilerini SQLite'a yazar, **FastAPI** servisi bu verileri HTTP üzerinden sunar ve **React (Vite)** tabanlı bir panel basınç, akış, reoloji ve yapılandırılabilir kuyu/BHA parametrelerini görselleştirir. Arayüz **Türkçe ve İngilizce** etiketleri ve farklı mühendislik birimlerini destekler.
 
-Initial scaffolding and much of the first implementation were produced with **Google Antigravity**; this repository may include follow-up fixes and documentation.
+İlk iskelet ve başlangıç implementasyonunun önemli bir kısmı **Google Antigravity** ile üretilmiştir; bu depoda sonradan eklenen düzeltmeler ve dokümantasyonlar bulunabilir.
 
-## Architecture
+## Mimari
 
-| Piece | Role |
+| Bileşen | Rol |
 |--------|------|
-| `mock_data_gen.py` | Correlated random walk + simplified hydraulics; inserts one row every ~2 s into `sensor_data.db`. |
-| `server.py` | REST API: latest row, historical series (with coarse downsampling for long ranges), read/write simulator config. |
-| `dashboard/` | Vite + React + Recharts; polls the API and renders cards, pump gauge, tank level, and modals. |
+| `mock_data_gen.py` | Korelasyonlu random walk + basitleştirilmiş hidrolik hesaplar; yaklaşık her 2 saniyede bir `sensor_data.db` içine yeni satır ekler. |
+| `server.py` | REST API: son satır, geçmiş veri serisi (uzun aralıklarda kaba downsampling), simülatör ayarlarını okuma/yazma. |
+| `dashboard/` | Vite + React + Recharts; API'yi periyodik olarak çağırır ve kartlar, pompa göstergesi, tank seviyesi ile modalları render eder. |
 
-## Prerequisites
+## Önkoşullar
 
-- Python 3.10+ (recommended)
-- Node.js 18+ (for the dashboard)
+- Python 3.10+ (önerilir)
+- Node.js 18+ (dashboard için)
 
-## Setup
+## Kurulum
 
-### 1. Python dependencies
+### 1. Python bağımlılıkları
 
-From the repository root:
+Depo kök dizininden:
 
 ```bash
 python -m pip install -r requirements.txt
 ```
 
-### 2. Generate data (terminal 1)
+### 2. Veri üretimini başlatın (terminal 1)
 
 ```bash
 python mock_data_gen.py
 ```
 
-Leave this running so the database keeps updating.
+Veritabanının sürekli güncellenmesi için bu süreci açık bırakın.
 
-### 3. API server (terminal 2)
+### 3. API sunucusunu başlatın (terminal 2)
 
 ```bash
 python server.py
 ```
 
-The API listens on **http://localhost:8000** (see `uvicorn.run` in `server.py`).
+API, **http://localhost:8000** adresinde çalışır (`server.py` içindeki `uvicorn.run` satırına bakabilirsiniz).
 
-### 4. Dashboard (terminal 3)
+### 4. Dashboard'u başlatın (terminal 3)
 
 ```bash
 cd dashboard
@@ -51,17 +51,17 @@ npm install
 npm run dev
 ```
 
-Open the URL Vite prints (typically **http://localhost:5173**). The frontend is configured to call `http://localhost:8000`.
+Vite'ın terminale yazdığı URL'yi açın (genellikle **http://localhost:5173**). Frontend, `http://localhost:8000` adresini çağıracak şekilde yapılandırılmıştır.
 
-## Optional: PDF text extraction
+## Opsiyonel: PDF metin çıkarımı
 
-`extract_pdf.py` uses `pypdf` to dump text from a paper PDF into `pdf_text.txt` (adjust the filename inside the script if needed).
+`extract_pdf.py`, `pypdf` kullanarak makale PDF'inden metni `pdf_text.txt` dosyasına çıkarır (gerekirse script içindeki PDF dosya adını değiştirin).
 
-## Project layout
+## Proje yapısı
 
-- `sensor_data.db` — SQLite file (created when you run the generator or server).
-- `dashboard/src/App.jsx` — Main UI, unit conversion, and API polling.
+- `sensor_data.db` — SQLite veritabanı dosyası (jeneratör veya sunucu çalışınca oluşur).
+- `dashboard/src/App.jsx` — Ana arayüz, birim dönüşümleri ve API polling akışı.
 
-## License
+## Lisans
 
-Add a license file if you publish this repo publicly.
+Bu depoyu herkese açık yayımlayacaksanız bir lisans dosyası ekleyin.
