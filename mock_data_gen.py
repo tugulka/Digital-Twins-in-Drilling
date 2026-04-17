@@ -1,3 +1,9 @@
+"""
+Synthetic rig data generator: maintains a simple physical-ish state machine, applies
+optional targets from `sim_config` (written by the dashboard via FastAPI), and inserts
+one sensor row into SQLite on each tick. Pressure/flow/depth units in the DB follow
+the column names (e.g. Pump_Press_psi in PSI, Flow_Rate_lpm in L/min).
+"""
 import sqlite3
 import random
 from datetime import datetime
@@ -39,7 +45,7 @@ import json
 
 class SimState:
     def __init__(self):
-        # Base independent variables
+        # Slowly drifting “surface” and mud properties (random walk or toward API targets).
         self.rop = 15.0
         self.mud_level = 80.0
         self.flow_rate = 2000.0
@@ -56,6 +62,7 @@ class SimState:
         self.last_time = time.time()
 
     def get_next(self, conn):
+        """Advance simulation one step and return a dict matching the sensor_data table."""
         config = None
         try:
             cursor = conn.cursor()
@@ -66,7 +73,7 @@ class SimState:
         except Exception:
             pass
 
-        # 1. Update independent variables using Random Walk or Target Shift
+        # 1. Update independent variables: move toward optional API targets or random walk.
         def update_val(current, target, min_v, max_v, step_size, rand_range, extra=0):
             if target is not None and target > 0:
                 diff = target - current
@@ -121,7 +128,7 @@ class SimState:
         target_den = config.get("target_density") if config else None
         self.density = update_val(self.density, target_den, 1.0, 2.7, 0.01, 0.02)
 
-        # 3. Calculate correlated dependent variables
+        # 3. Dependent pressures: simple correlation fallback, or bit + pipe drop if BHA config exists.
         pump_press = 2500 + (self.flow_rate - 2000)*1.2 + (self.pv - 20.0)*20.0 + random.uniform(-5, 5)
         
         if config:
@@ -134,12 +141,13 @@ class SimState:
             q_gpm = self.flow_rate * 0.264172
             mw_ppg = self.density * 8.345
             
+            # Classic-style bit pressure-drop proxy (PPG, GPM, TFA in in²).
             bit_pd = (mw_ppg * (q_gpm**2)) / (10858 * (tfa**2))
 
             pipe_pd = 0
+            # Config lengths are in `length_unit`; inner diameters stay in inches in this toy model.
             unit_mult = 3.28084 if config.get("length_unit") == "m" else 1.0
             
-            # Helper for pipe pressure drop
             def calc_pd(length, inner_d):
                 length_ft = length * unit_mult
                 if length_ft > 0 and inner_d > 0:
@@ -180,6 +188,7 @@ class SimState:
         }
 
 def save_to_db(conn, data):
+    """Persist one timestep; schema must match `init_db` / server expectations."""
     cursor = conn.cursor()
     cursor.execute('''
         INSERT INTO sensor_data (

@@ -1,6 +1,14 @@
+/**
+ * Drilling digital-twin dashboard: React UI talks to a local FastAPI server that reads
+ * SQLite rows written by mock_data_gen.py. Raw sensor fields are stored in SI-friendly
+ * bases (e.g. pressure in PSI, flow in L/min); this file converts for display units.
+ */
 import React, { useState, useEffect } from 'react';
 import './index.css';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
+
+/** 1 PSI ≈ 0.0689476 bar (same factor used in convertValue and pump gauge scaling). */
+const PSI_TO_BAR = 0.0689476;
 
 const DICTIONARY = {
   TR: {
@@ -36,7 +44,8 @@ const DICTIONARY = {
     max_press: "Maks. Basınç",
     liner_rad: "Liner Yarıçapı",
     density_label: "YOĞUNLUK",
-    density_name: "Çamur Yoğunluğu"
+    density_name: "Çamur Yoğunluğu",
+    local_time_label: "YEREL SAAT"
   },
   EN: {
     app_title: "Digital Twins in Drilling Panel",
@@ -71,10 +80,12 @@ const DICTIONARY = {
     max_press: "Max Pressure",
     liner_rad: "Liner Radius",
     density_label: "DENSITY",
-    density_name: "Mud Density"
+    density_name: "Mud Density",
+    local_time_label: "LOCAL TIME"
   }
 };
 
+/** Map API numeric fields to the unit system selected in the settings bar. */
 const convertValue = (val, type, units) => {
   if (val === undefined || val === null) return val;
   let v = Number(val);
@@ -86,7 +97,7 @@ const convertValue = (val, type, units) => {
        if(units.flow.includes('bbl')) return v / 158.987;
        return v;
      case 'pressure':
-       return units.pressure === 'bar' ? v * 0.0689476 : v;
+       return units.pressure === 'bar' ? v * PSI_TO_BAR : v;
      case 'temp':
        return units.temp === '°F' ? (v * 1.8 + 32) : v;
      case 'density':
@@ -124,11 +135,16 @@ function SensorCard({ sensor, value, previousValue, onClick, t }) {
   const [changed, setChanged] = useState(false);
 
   useEffect(() => {
-    if (value !== previousValue && previousValue !== undefined) {
+    if (value === previousValue || previousValue === undefined) return;
+    let clearFlash;
+    const id = setTimeout(() => {
       setChanged(true);
-      const timer = setTimeout(() => setChanged(false), 500);
-      return () => clearTimeout(timer);
-    }
+      clearFlash = setTimeout(() => setChanged(false), 500);
+    }, 0);
+    return () => {
+      clearTimeout(id);
+      if (clearFlash) clearTimeout(clearFlash);
+    };
   }, [value, previousValue]);
 
   const trend = value > previousValue ? 'trend-up' : value < previousValue ? 'trend-down' : 'trend-neutral';
@@ -159,15 +175,19 @@ function RheologyCard({ group, latest, previous, onClick, t, units }) {
     const [changed, setChanged] = useState(false);
   
     useEffect(() => {
-       let c = false;
-       group.sensors.forEach(s => {
-           if (latest && previous && latest[s.id] !== previous[s.id]) c = true;
-       });
-       if (c) {
+       const c = group.sensors.some(
+         (s) => latest && previous && latest[s.id] !== previous[s.id]
+       );
+       if (!c) return;
+       let clearFlash;
+       const id = setTimeout(() => {
          setChanged(true);
-         const timer = setTimeout(() => setChanged(false), 500);
-         return () => clearTimeout(timer);
-       }
+         clearFlash = setTimeout(() => setChanged(false), 500);
+       }, 0);
+       return () => {
+         clearTimeout(id);
+         if (clearFlash) clearTimeout(clearFlash);
+       };
     }, [latest, previous, group.sensors]);
   
     return (
@@ -212,11 +232,16 @@ function TankCard({ sensor, value, previousValue, chartData, onClick, t }) {
   const [dim, setDim] = useState({ length: 12, width: 3.5, height: 2.5 });
 
   useEffect(() => {
-    if (value !== previousValue && previousValue !== undefined) {
+    if (value === previousValue || previousValue === undefined) return;
+    let clearFlash;
+    const id = setTimeout(() => {
       setChanged(true);
-      const timer = setTimeout(() => setChanged(false), 500);
-      return () => clearTimeout(timer);
-    }
+      clearFlash = setTimeout(() => setChanged(false), 500);
+    }, 0);
+    return () => {
+      clearTimeout(id);
+      if (clearFlash) clearTimeout(clearFlash);
+    };
   }, [value, previousValue]);
 
   const pct = value !== undefined ? Number(value) : 0;
@@ -264,7 +289,9 @@ function TankCard({ sensor, value, previousValue, chartData, onClick, t }) {
                      rateStr = `0.0 ${volUnit}/h`;
                  }
              }
-         } catch(e) {}
+         } catch {
+           /* Ignore bad timestamps when estimating gain/loss rate */
+         }
       }
   }
 
@@ -332,14 +359,21 @@ function TankCard({ sensor, value, previousValue, chartData, onClick, t }) {
   );
 }
 
-function PumpCard({ sensor, value, previousValue, onClick, t }) {
+/**
+ * Pump pressure with a semi-circular gauge. `value` is already converted for display
+ * (PSI or bar). The scale maximum is stored canonically in PSI so the needle ratio
+ * stays correct when the user switches units without duplicating state in an effect.
+ */
+function PumpCard({ sensor, value, onClick, t, pressureUnit }) {
   const [showSettings, setShowSettings] = useState(false);
-  const [maxPressure, setMaxPressure] = useState(5000);
+  const [maxPressurePsi, setMaxPressurePsi] = useState(5000);
   const [linerRadius, setLinerRadius] = useState(6.0);
   const [lrUnit, setLrUnit] = useState('in');
 
+  const gaugeMax = pressureUnit === 'bar' ? maxPressurePsi * PSI_TO_BAR : maxPressurePsi;
+  const maxDisplay = gaugeMax;
   const currentValue = value !== undefined ? Number(value) : 0;
-  const pct = Math.min(Math.max(currentValue / maxPressure, 0), 1);
+  const pct = gaugeMax > 0 ? Math.min(Math.max(currentValue / gaugeMax, 0), 1) : 0;
   const arcLength = 251.2; 
   const strokeDashoffset = arcLength - (arcLength * pct);
 
@@ -371,7 +405,7 @@ function PumpCard({ sensor, value, previousValue, onClick, t }) {
               </text>
               
               <text x="20" y="120" textAnchor="middle" fill="var(--text-secondary)" fontSize="10" fontWeight="bold">0</text>
-              <text x="180" y="120" textAnchor="middle" fill="var(--text-secondary)" fontSize="10" fontWeight="bold">{maxPressure}</text>
+              <text x="180" y="120" textAnchor="middle" fill="var(--text-secondary)" fontSize="10" fontWeight="bold">{Math.round(maxDisplay)}</text>
             </svg>
          </div>
 
@@ -381,7 +415,11 @@ function PumpCard({ sensor, value, previousValue, onClick, t }) {
                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <label style={{ fontSize:'0.75rem', color:'var(--text-secondary)' }}>{t.max_press}:</label>
                     <div style={{ display:'flex', gap:'0.5rem', alignItems:'center' }}>
-                      <input type="number" step="100" value={maxPressure} onChange={e => setMaxPressure(Number(e.target.value))} style={{ width: '70px', padding:'0.2rem', background:'rgba(0,0,0,0.3)', border:'1px solid var(--panel-border)', color:'white', borderRadius:'4px', outline:'none', textAlign:'center', fontFamily:'inherit' }} />
+                      <input type="number" step={pressureUnit === 'bar' ? 1 : 100} value={maxDisplay} onChange={e => {
+                        const v = Number(e.target.value);
+                        if (!Number.isFinite(v) || v <= 0) return;
+                        setMaxPressurePsi(pressureUnit === 'bar' ? v / PSI_TO_BAR : v);
+                      }} style={{ width: '70px', padding:'0.2rem', background:'rgba(0,0,0,0.3)', border:'1px solid var(--panel-border)', color:'white', borderRadius:'4px', outline:'none', textAlign:'center', fontFamily:'inherit' }} />
                       <span style={{ fontSize:'0.75rem', color:'var(--text-secondary)' }}>{sensor.unit}</span>
                     </div>
                  </div>
@@ -432,7 +470,6 @@ function App() {
   });
 
   // Digital Twin Control State
-  const [changeMenuOpen, setChangeMenuOpen] = useState(false);
   const [activeChangeParam, setActiveChangeParam] = useState(null); // 'density', 'yp', 'nozzle', 'flow'
   const [changeInputValue, setChangeInputValue] = useState('');
   const [changeInputUnit, setChangeInputUnit] = useState('');
@@ -442,6 +479,22 @@ function App() {
 
   const [lang, setLang] = useState('TR'); 
   const t = DICTIONARY[lang];
+
+  /** Clock: Turkish locale uses 24 h and localized digits/labels; English uses 24 h as well. */
+  const formattedLocalTime =
+    lang === 'TR'
+      ? currentTime.toLocaleTimeString('tr-TR', {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: false,
+        })
+      : currentTime.toLocaleTimeString('en-GB', {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: false,
+        });
 
   const [units, setUnits] = useState({
     rop: 'm/h',
@@ -454,6 +507,10 @@ function App() {
   const [selectedUnitParam, setSelectedUnitParam] = useState('rop');
 
   const SENSORS = getSensorsConfig(units, lang);
+  const currentDepthValue =
+    globalLatest?.Current_Depth_m !== undefined
+      ? parseFloat(convertValue(globalLatest.Current_Depth_m, 'depth', units).toFixed(1))
+      : null;
 
   // Define layout structures strictly
   const topSensors = [
@@ -478,6 +535,7 @@ function App() {
     ]
   };
 
+  /** Poll latest row for cards and connection status. */
   useEffect(() => {
     const fetchLatest = async () => {
       try {
@@ -493,7 +551,7 @@ function App() {
            setIsConnected(true);
            setError(null);
         }
-      } catch (err) {
+      } catch {
         setIsConnected(false);
         setError(t.api_error);
       }
@@ -510,6 +568,7 @@ function App() {
        .catch(err => console.log(err));
   }, []);
 
+  /** When a sensor modal is open, load history for the chart (live bucket vs time windows). */
   useEffect(() => {
     if (!selectedSensor) return;
 
@@ -568,8 +627,8 @@ function App() {
     <div className="dashboard-container">
       <header className="dashboard-header" style={{ position: 'relative' }}>
         <div style={{ position: 'absolute', top: 0, left: 0, background: 'rgba(0,0,0,0.3)', padding: '0.4rem 0.8rem', borderRadius: '6px', border: '1px solid var(--panel-border)', display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>LOCAL TIME</span>
-            <span style={{ fontSize: '1.2rem', fontWeight: 'bold', color: 'var(--accent-color)' }}>{currentTime.toLocaleTimeString()}</span>
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{t.local_time_label}</span>
+            <span style={{ fontSize: '1.2rem', fontWeight: 'bold', color: 'var(--accent-color)' }}>{formattedLocalTime}</span>
         </div>
         
         <div className="lang-toggle" style={{ position: 'absolute', top: 0, right: 0 }}>
@@ -593,11 +652,9 @@ function App() {
             >
                <span>👇 {lang === 'TR' ? 'TOPLAM DERİNLİK:' : 'TOTAL DEPTH:'}</span>
                <span style={{ marginLeft: '0.8rem', fontWeight: 'bold', fontSize: '2rem', textShadow: '0 0 10px rgba(56, 189, 248, 0.8)' }}>
-                  {chartData.length > 0 && chartData[chartData.length-1]?.Current_Depth_m !== undefined 
-                      ? (units.depth === 'ft' 
-                          ? (chartData[chartData.length-1].Current_Depth_m * 3.28084).toFixed(1) + ' ft' 
-                          : chartData[chartData.length-1].Current_Depth_m.toFixed(1) + ' m') 
-                      : '0.0 ' + units.depth}
+                  {currentDepthValue !== null
+                      ? `${currentDepthValue} ${units.depth}`
+                      : `0.0 ${units.depth}`}
                </span>
             </div>
         </div>
@@ -726,8 +783,8 @@ function App() {
          {topSensors[3] && (
             <PumpCard 
               sensor={topSensors[3]} t={t}
+              pressureUnit={units.pressure}
               value={globalLatest ? parseFloat(convertValue(globalLatest[topSensors[3].id], topSensors[3].type, units).toFixed(2)) : undefined} 
-              previousValue={globalPrev ? parseFloat(convertValue(globalPrev[topSensors[3].id], topSensors[3].type, units).toFixed(2)) : undefined}
               onClick={() => { setSelectedSensor(topSensors[3]); setTimeRange('live'); }}
             />
          )}
@@ -841,11 +898,12 @@ function App() {
 
       {/* DIGITAL TWIN CONTROL MODAL */}
       {activeChangeParam && (() => {
-        let title = ''; let units = [];
-        if (activeChangeParam === 'density') { title = lang==='TR' ? 'Hedef Yoğunluk Belirle' : 'Set Target Density'; units = ['SG', 'lb/gal', 'lb/ft³']; }
-        if (activeChangeParam === 'yp') { title = lang==='TR' ? 'Etkin Akma Sınırı Belirle' : 'Set Target YP'; units = ['lbf/100ft²', 'Pa']; }
-        if (activeChangeParam === 'nozzle') { title = lang==='TR' ? 'Nozzle Boyutu Değiştir' : 'Change Nozzle Size'; units = ['/32']; }
-        if (activeChangeParam === 'flow') { title = lang==='TR' ? 'Akış Hızı Belirle' : 'Set Flow Rate'; units = ['lpm', 'gpm']; }
+        let title = '';
+        let unitOptions = [];
+        if (activeChangeParam === 'density') { title = lang==='TR' ? 'Hedef Yoğunluk Belirle' : 'Set Target Density'; unitOptions = ['SG', 'lb/gal', 'lb/ft³']; }
+        if (activeChangeParam === 'yp') { title = lang==='TR' ? 'Etkin Akma Sınırı Belirle' : 'Set Target YP'; unitOptions = ['lbf/100ft²', 'Pa']; }
+        if (activeChangeParam === 'nozzle') { title = lang==='TR' ? 'Nozzle Boyutu Değiştir' : 'Change Nozzle Size'; unitOptions = ['/32']; }
+        if (activeChangeParam === 'flow') { title = lang==='TR' ? 'Akış Hızı Belirle' : 'Set Flow Rate'; unitOptions = ['lpm', 'gpm']; }
 
         const applyTarget = () => {
             let val = Number(changeInputValue);
@@ -896,7 +954,7 @@ function App() {
                  <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', marginBottom: '2rem' }}>
                      <input type="number" step="0.1" value={changeInputValue} onChange={(e) => setChangeInputValue(e.target.value)} style={{ flex: 2, padding: '0.8rem', borderRadius: '4px', background: 'var(--bg-dark)', border: '1px solid var(--panel-border)', color: '#fff', fontSize: '1.2rem', textAlign: 'center' }} placeholder={lang==='TR'?'Değer / Value':"Value"} />
                      <select value={changeInputUnit} onChange={(e) => setChangeInputUnit(e.target.value)} style={{ flex: 1, padding: '0.8rem', borderRadius: '4px', background: 'var(--bg-dark)', border: '1px solid var(--panel-border)', color: 'var(--accent-color)', fontSize: '1rem', cursor: 'pointer' }}>
-                         {units.map(u => <option key={u} value={u}>{u}</option>)}
+                         {unitOptions.map(u => <option key={u} value={u}>{u}</option>)}
                      </select>
                  </div>
                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
@@ -918,7 +976,7 @@ function App() {
       {/* BHA & WELLBORE CONFIG MODAL */}
       {showBHAConfig && (() => {
         let parsedCasings = [];
-        try { parsedCasings = JSON.parse(bhaConfig.casings); } catch(e) {}
+        try { parsedCasings = JSON.parse(bhaConfig.casings); } catch { parsedCasings = []; }
         if (!Array.isArray(parsedCasings)) parsedCasings = [];
 
         const updateCasing = (idx, field, val) => {

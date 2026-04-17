@@ -1,3 +1,4 @@
+"""One-off utility: extract plain text from the project PDF into pdf_text.txt."""
 import sys
 import subprocess
 try:

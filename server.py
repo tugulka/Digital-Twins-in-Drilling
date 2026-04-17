@@ -1,3 +1,9 @@
+"""
+HTTP API for the drilling dashboard. Reads/writes SQLite (`sensor_data.db`):
+- Rows are appended by `mock_data_gen.py` (simulated rig sensors).
+- `GET /api/latest-data` and `/api/history` feed the React charts and cards.
+- `GET/POST /api/config` stores BHA/wellbore knobs used by the simulator.
+"""
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import sqlite3
@@ -41,8 +47,8 @@ DB_NAME = "sensor_data.db"
 
 @contextmanager
 def get_db_cursor():
+    """Yields a cursor with Row factory so each row maps cleanly to `dict(row)`."""
     conn = sqlite3.connect(DB_NAME)
-    # Convert SQLite row to dictionary
     conn.row_factory = sqlite3.Row
     try:
         yield conn.cursor()
@@ -92,8 +98,6 @@ def get_config():
                 return dict(row)
         except sqlite3.OperationalError:
             pass
-        # Defaults
-        # Defaults
         return {
             "casings": '[{"start": 0, "end": 3000, "id": 8.5}]',
             "length_unit": "m",
@@ -106,6 +110,7 @@ def get_config():
 
 @app.post("/api/config")
 def set_config(config: SimConfig):
+    """Replaces the single-row sim_config table (simple persistence without migrations)."""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute('DROP TABLE IF EXISTS sim_config')
