@@ -1,8 +1,9 @@
 """
 HTTP API for the drilling dashboard. Reads/writes SQLite (`sensor_data.db`):
-- Rows are appended by `mock_data_gen.py` (simulated rig sensors).
-- `GET /api/latest-data` and `/api/history` feed the React charts and cards.
-- `GET/POST /api/config` stores BHA/wellbore knobs used by the simulator.
+- Features a lightweight FastAPI backend routing.
+- Rows are appended continuously by the physics simulator (`mock_data_gen.py`).
+- `GET /api/latest-data` and `GET /api/history` feed the React charts and cards natively.
+- `GET /api/config` and `POST /api/config` store BHA/wellbore properties to influence simulation physics.
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -47,7 +48,10 @@ DB_NAME = "sensor_data.db"
 
 @contextmanager
 def get_db_cursor():
-    """Yields a cursor with Row factory so each row maps cleanly to `dict(row)`."""
+    """
+    Yields a database cursor configured with sqlite3.Row factory.
+    This ensures that each fetched row can be cleanly mapped to a Python `dict(row)`.
+    """
     conn = sqlite3.connect(DB_NAME)
     conn.row_factory = sqlite3.Row
     try:
@@ -57,6 +61,10 @@ def get_db_cursor():
 
 @app.get("/api/latest-data")
 def get_latest_data():
+    """
+    Retrieves the absolute most recent sensor data record from the DB.
+    This empowers the React dashboard's primary numeric displays (e.g., Sensor Cards).
+    """
     with get_db_cursor() as cursor:
         cursor.execute("SELECT * FROM sensor_data ORDER BY id DESC LIMIT 1")
         row = cursor.fetchone()
@@ -66,20 +74,28 @@ def get_latest_data():
 
 @app.get("/api/history")
 def get_history(limit: int = 30, minutes: int = None, hours: int = None):
+    """
+    Retrieves historical sensor data to plot on the React-Recharts components.
+    Includes smart downsampling. If 24 hours of data are requested, sending 
+    1 row/sec (86,400 rows) would immediately freeze the browser. 
+    Thus, logic here reduces temporal footprint modulo id.
+    """
     with get_db_cursor() as cursor:
         if minutes or hours:
+            # Query dataset restricted to the provided timeframe bounds
             delta = timedelta(minutes=minutes or 0, hours=hours or 0)
             threshold = (datetime.now() - delta).strftime("%Y-%m-%d %H:%M:%S")
-            # Downsample intelligently to ensure the browser doesn't freeze
-            # Assume 1 record every 2 seconds roughly.
+            
+            # Downsample intelligently. Assumes ~1 record recorded every 2 seconds.
             total_seconds = (minutes or 0) * 60 + (hours or 0) * 3600
-            modulo = max(1, int(total_seconds / 2 / 200)) # max 200~300 data points
+            modulo = max(1, int(total_seconds / 2 / 200)) # Caps at ~200 data points for UI stability.
 
+            # Returns only every 'modulo' row id in ascending chronological order
             cursor.execute("SELECT * FROM sensor_data WHERE Timestamp >= ? AND id % ? = 0 ORDER BY id ASC", (threshold, modulo))
             rows = cursor.fetchall()
             return [dict(row) for row in rows]
         else:
-            # Get last 'limit' records in ascending order for charting
+            # Simple retrieval context: Get the last 'limit' records in ascending order
             cursor.execute("""
                 SELECT * FROM (
                     SELECT * FROM sensor_data ORDER BY id DESC LIMIT ?
@@ -90,6 +106,10 @@ def get_history(limit: int = 30, minutes: int = None, hours: int = None):
 
 @app.get("/api/config")
 def get_config():
+    """
+    Exposes current underlying parameters and configurations from 'sim_config'.
+    Returns default values if the DB layout is not yet instantiated.
+    """
     with get_db_cursor() as cursor:
         try:
             cursor.execute("SELECT * FROM sim_config WHERE id=1")
@@ -97,7 +117,8 @@ def get_config():
             if row:
                 return dict(row)
         except sqlite3.OperationalError:
-            pass
+            pass # Table doesn't exist yet, fallback to hardcoded defaults
+            
         return {
             "casings": '[{"start": 0, "end": 3000, "id": 8.5}]',
             "length_unit": "m",
@@ -110,10 +131,16 @@ def get_config():
 
 @app.post("/api/config")
 def set_config(config: SimConfig):
-    """Replaces the single-row sim_config table (simple persistence without migrations)."""
+    """
+    Overwrites the single-row (`id = 1`) `sim_config` table constraint.
+    It guarantees that physics calculations on the Python background worker
+    reflect exactly what the user set through React immediately.
+    """
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute('DROP TABLE IF EXISTS sim_config')
+    
+    # Establish single row limit
     cursor.execute('''
         CREATE TABLE sim_config (
             id INTEGER PRIMARY KEY CHECK (id = 1),

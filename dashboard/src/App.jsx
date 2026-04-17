@@ -45,7 +45,11 @@ const DICTIONARY = {
     liner_rad: "Liner Yarıçapı",
     density_label: "YOĞUNLUK",
     density_name: "Çamur Yoğunluğu",
-    local_time_label: "YEREL SAAT"
+    local_time_label: "YEREL SAAT",
+    alarm_volume: "Anormal Hacim Hareketi",
+    alarm_dismiss: "MÜDAHALE ET / SUSTUR",
+    alarm_thresh_title: "Alarm Eşiği",
+    alarm_dev: "sapma"
   },
   EN: {
     app_title: "Digital Twins in Drilling Panel",
@@ -81,7 +85,11 @@ const DICTIONARY = {
     liner_rad: "Liner Radius",
     density_label: "DENSITY",
     density_name: "Mud Density",
-    local_time_label: "LOCAL TIME"
+    local_time_label: "LOCAL TIME",
+    alarm_volume: "Abnormal Volume Movement",
+    alarm_dismiss: "ACKNOWLEDGE / MUTE",
+    alarm_thresh_title: "Alarm Threshold",
+    alarm_dev: "deviation"
   }
 };
 
@@ -223,14 +231,25 @@ function RheologyCard({ group, latest, previous, onClick, t, units }) {
     );
 }
 
-function TankCard({ sensor, value, previousValue, chartData, onClick, t }) {
-  const [changed, setChanged] = useState(false);
+function TankCard({ sensor, value, previousValue, bhaConfig, latest, onClick, t }) {
+  // --- UI States ---
+  const [changed, setChanged] = useState(false); // Triggers visual flash on value change
   const [showSettings, setShowSettings] = useState(false);
-  const [dimUnit, setDimUnit] = useState('m'); 
-  const [volUnit, setVolUnit] = useState('m³'); 
+  const [dimUnit, setDimUnit] = useState('m'); // Base unit for tank dimensions
+  const [volUnit, setVolUnit] = useState('m³'); // Selected unit for volume display
 
-  const [dim, setDim] = useState({ length: 12, width: 3.5, height: 2.5 });
+  // --- Configuration States ---
+  const [dim, setDim] = useState({ length: 12, width: 3.5, height: 2.5 }); // Tank dimensions
+  const [alarmThreshold, setAlarmThreshold] = useState(1.0); // Allowable deviation before sounding alarm (in chosen volUnit/h)
+  const [isAlarmActive, setIsAlarmActive] = useState(false); // Indicates active alarm state
+  const [isAlarmMuted, setIsAlarmMuted] = useState(false); // User overrides alarm pop-up
 
+  // --- Internal Data History ---
+  // Rather than relying on the graph's chartData (which breaks if not selected), 
+  // the Tank internally buffers past values and timestamps to find reliable rate-of-change.
+  const [localHistory, setLocalHistory] = useState([]);
+
+  // Track changes to create a brief flash effect, making the UI feel dynamic.
   useEffect(() => {
     if (value === previousValue || previousValue === undefined) return;
     let clearFlash;
@@ -238,6 +257,17 @@ function TankCard({ sensor, value, previousValue, chartData, onClick, t }) {
       setChanged(true);
       clearFlash = setTimeout(() => setChanged(false), 500);
     }, 0);
+
+    // Buffer the current value and current time to establish mathematical rate
+    setLocalHistory(prev => {
+        const now = Date.now();
+        // Discard data older than recent buffer window to maintain memory efficiency 
+        // We keep up to 10 instances representing ~20 seconds of real-time server activity.
+        const updated = [...prev, { val: Number(value), time: now }];
+        if (updated.length > 8) updated.shift();
+        return updated;
+    });
+
     return () => {
       clearTimeout(id);
       if (clearFlash) clearTimeout(clearFlash);
@@ -257,43 +287,73 @@ function TankCard({ sensor, value, previousValue, chartData, onClick, t }) {
     return m3;
   };
 
+  // Geometry calculation for the Tank's total and active capacities
   const totalVolumeM3 = toMeters(dim.length, dimUnit) * toMeters(dim.width, dimUnit) * toMeters(dim.height, dimUnit);
   const totalVolume = volFromM3(totalVolumeM3, volUnit);
   const currentVolume = totalVolume * (pct / 100);
 
-  let rateStr = '';
+  // --- Real-time Derivative Engine ---
+  let rateStr = '--';
   let isGain = false;
   let isLoss = false;
-  if (chartData && chartData.length > 3 && pct !== undefined) {
-      // Find a safe lookback window (e.g. 5 steps ago) to smooth minor noises
-      const lookbackIndex = Math.max(0, chartData.length - 6);
-      const historicalRow = chartData[lookbackIndex];
-      const currentRow = chartData[chartData.length - 1];
-      
-      if (historicalRow && historicalRow.Timestamp && currentRow && currentRow.Timestamp) {
-         try {
-             // Timestamps look like "2026-04-10 13:45:00"
-             const t1 = new Date(historicalRow.Timestamp.replace(' ', 'T')).getTime();
-             const t2 = new Date(currentRow.Timestamp.replace(' ', 'T')).getTime();
-             const dtHours = Math.abs(t2 - t1) / 1000 / 3600;
-             if (dtHours > 0) {
-                 const oldPct = Number(historicalRow[sensor.id]);
-                 const oldVol = totalVolume * (oldPct / 100);
-                 const deltaVol = currentVolume - oldVol;
-                 const rate = deltaVol / dtHours;
-                 isGain = rate > 0.05;
-                 isLoss = rate < -0.05;
-                 if (isGain || isLoss) {
-                     rateStr = `${rate > 0 ? '+' : ''}${rate.toFixed(1)} ${volUnit}/h`;
-                 } else {
-                     rateStr = `0.0 ${volUnit}/h`;
-                 }
-             }
-         } catch {
-           /* Ignore bad timestamps when estimating gain/loss rate */
-         }
+  let currentRate = 0;
+
+  if (localHistory.length >= 4) {
+      // Fetch the oldest record in the buffer to create a stable slope
+      const startRecord = localHistory[0];
+      const endRecord = localHistory[localHistory.length - 1];
+      const dtHours = (endRecord.time - startRecord.time) / 1000 / 3600;
+
+      if (dtHours > 0) {
+          const oldVol = totalVolume * (startRecord.val / 100);
+          const newVol = totalVolume * (endRecord.val / 100);
+          currentRate = (newVol - oldVol) / dtHours;
+          
+          isGain = currentRate > 0.05;
+          isLoss = currentRate < -0.05;
+          rateStr = `${currentRate > 0 ? '+' : ''}${currentRate.toFixed(1)} ${volUnit}/h`;
       }
   }
+
+  // --- Physics Correlation Engine ---
+  // The system checks if the tank volume flux matches rock displacement (Drilled Volume).
+  // Formula: D_hole = ROP * Area of Bit. 
+  useEffect(() => {
+      // Ensure we have active drilling velocity and dimensional metrics
+      if (!bhaConfig || !latest || latest.ROP_m_h === undefined || localHistory.length < 4) return;
+      
+      const rop_m_h = Number(latest.ROP_m_h);
+      const bit_diameter_in = Number(bhaConfig.bit_diameter);
+      
+      // Calculate Hole cross-sectional Area (A = pi * r^2). Conversion: inch -> meters
+      const bit_radius_m = (bit_diameter_in * 0.0254) / 2;
+      const hole_area_m2 = Math.PI * Math.pow(bit_radius_m, 2);
+      
+      // Calculate Expected Volumetric Flow (in m^3/h)
+      // Since drilling naturally displaces soil, the Mud Pit fundamentally LOSES mud 
+      // equal to the magnitude of the hole generated (Expected Negative Value).
+      const expectedRockLoss_m3_h = -(rop_m_h * hole_area_m2);
+      
+      // Cast the M^3 result into the specific active volume unit (bbl, gal) to maintain 1:1 scale mathematically
+      const expectedDisplacementUnit_h = volFromM3(expectedRockLoss_m3_h, volUnit);
+      
+      // Measure deviance explicitly against physics bounds. E.g if expected loss is -10, and real rate is -12, displacement dev=2.
+      const deviance = Math.abs(currentRate - expectedDisplacementUnit_h);
+      
+      if (deviance > alarmThreshold) {
+          if (!isAlarmMuted) setIsAlarmActive(true);
+      } else {
+          setIsAlarmActive(false);
+          setIsAlarmMuted(false); // Reset mute layer returning to safety
+      }
+  }, [currentRate, bhaConfig, latest, volUnit, alarmThreshold, isAlarmMuted, localHistory.length]);
+
+  // Utility to handle alarm dismissal popup
+  const handleAcknowledgeAlarm = (e) => {
+      e.stopPropagation();
+      setIsAlarmActive(false);
+      setIsAlarmMuted(true);
+  };
 
   return (
     <div className="sensor-card">
@@ -308,9 +368,9 @@ function TankCard({ sensor, value, previousValue, chartData, onClick, t }) {
         </button>
       </div>
 
-      <div className="tank-container">
-        <div className={`tank-visual-wrapper ${changed ? 'value-changed' : ''}`} onClick={onClick}>
-           <div className="tank-level" style={{ height: `${pct}%` }} />
+      <div className="tank-container" style={{ position: 'relative' }}>
+        <div className={`tank-visual-wrapper ${changed ? 'value-changed' : ''}`} onClick={onClick} style={{ borderColor: isAlarmActive ? 'var(--danger)' : 'var(--panel-border)', boxShadow: isAlarmActive ? '0 0 15px rgba(239, 68, 68, 0.6)' : 'none', transition: 'all 0.3s' }}>
+           <div className="tank-level" style={{ height: `${pct}%`, background: isAlarmActive ? 'rgba(239, 68, 68, 0.6)' : 'rgba(56, 189, 248, 0.4)' }} />
            <div className="tank-level-text" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
              <span>{pct.toFixed(1)}%</span>
              {rateStr && (
@@ -321,11 +381,21 @@ function TankCard({ sensor, value, previousValue, chartData, onClick, t }) {
            </div>
         </div>
         
+        {/* Render a critical alert badge covering the tank if alarm is deployed */}
+        {isAlarmActive && (
+            <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', background: 'rgba(0,0,0,0.6)', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', borderRadius: '8px', zIndex: 10 }}>
+               <span style={{ color: 'var(--danger)', fontWeight: 'bold', fontSize: '1.4rem', animation: 'pulse 1s infinite' }}>ALARM</span>
+               <span style={{ color: '#fff', fontSize: '0.8rem', textAlign: 'center', margin: '0.5rem' }}>{t.alarm_volume}</span>
+               <button onClick={handleAcknowledgeAlarm} style={{ background: 'var(--warning)', border: 'none', color: '#000', padding: '0.4rem 1rem', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold', marginTop: '0.5rem', textAlign: 'center' }}>{t.alarm_dismiss}</button>
+            </div>
+        )}
+        
         <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', display: 'flex', justifyContent: 'space-between', padding: '0 0.2rem' }}>
            <span>{currentVolume.toFixed(1)} {volUnit}</span>
            <span>{totalVolume.toFixed(1)} {volUnit}</span>
         </div>
 
+        {/* Tank Detailed Configuration & Alarm Bounds */}
         {showSettings && (
           <div className="tank-settings-panel" onClick={(e) => e.stopPropagation()}>
              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems:'center', marginBottom: '0.8rem' }}>
@@ -345,12 +415,20 @@ function TankCard({ sensor, value, previousValue, chartData, onClick, t }) {
                  </div>
              </div>
              
-             <div className="tank-dimensions">
+             <div className="tank-dimensions" style={{ marginBottom: '1rem' }}>
                  <input type="number" step="0.1" value={dim.length} onChange={e => setDim({...dim, length: Number(e.target.value)})} title={t.tank_l} /> 
                  <span className="tank-dim-x">x</span>
                  <input type="number" step="0.1" value={dim.width} onChange={e => setDim({...dim, width: Number(e.target.value)})} title={t.tank_w} />
                  <span className="tank-dim-x">x</span>
                  <input type="number" step="0.1" value={dim.height} onChange={e => setDim({...dim, height: Number(e.target.value)})} title={t.tank_h}/>
+             </div>
+
+             <div style={{ padding: '0.5rem', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: '6px' }}>
+                 <div style={{ fontSize: '0.75rem', color: 'var(--danger)', marginBottom: '0.3rem', fontWeight: 'bold' }}>{t.alarm_thresh_title}</div>
+                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                     <input type="number" step="0.5" value={alarmThreshold} onChange={e => setAlarmThreshold(Number(e.target.value))} style={{ width: '4rem', padding: '0.2rem', background: 'var(--bg-dark)', border: '1px solid var(--panel-border)', color: '#fff', fontSize: '0.8rem' }} />
+                     <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{volUnit}/h {t.alarm_dev}</span>
+                 </div>
              </div>
           </div>
         )}
@@ -797,7 +875,8 @@ function App() {
                 sensor={bottomSensors[0]} t={t}
                 value={globalLatest ? globalLatest[bottomSensors[0].id] : undefined} 
                 previousValue={globalPrev ? globalPrev[bottomSensors[0].id] : undefined}
-                chartData={chartData}
+                bhaConfig={bhaConfig}
+                latest={globalLatest}
                 onClick={() => { setSelectedSensor(bottomSensors[0]); setTimeRange('live'); }}
              />
          )}

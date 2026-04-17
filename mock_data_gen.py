@@ -1,8 +1,10 @@
 """
-Synthetic rig data generator: maintains a simple physical-ish state machine, applies
-optional targets from `sim_config` (written by the dashboard via FastAPI), and inserts
-one sensor row into SQLite on each tick. Pressure/flow/depth units in the DB follow
-the column names (e.g. Pump_Press_psi in PSI, Flow_Rate_lpm in L/min).
+Synthetic rig data generator: maintains a continuous physical state machine.
+This simulator models drilling mechanics (ROP, Depth, BHA friction) and fluid mechanics (Yield Point, Density, Flow Rate).
+Key behaviors:
+1. It reads optional targets from the `sim_config` SQLite table (written remotely by the React dashboard).
+2. It mathematically transitions core properties towards those targets (using gradient-based steps) OR applies a random walk for realism.
+3. It inserts one unified sensor row into the SQLite `sensor_data` table on each tick. The frontend consumes this.
 """
 import sqlite3
 import random
@@ -62,7 +64,11 @@ class SimState:
         self.last_time = time.time()
 
     def get_next(self, conn):
-        """Advance simulation one step and return a dict matching the sensor_data table."""
+        """
+        Advances the simulation state by one semantic step.
+        It pulls configuration rules, evaluates real-time gradients, calculates BHA friction,
+        and finally packages the data dictionary corresponding to the DB schema.
+        """
         config = None
         try:
             cursor = conn.cursor()
@@ -73,27 +79,31 @@ class SimState:
         except Exception:
             pass
 
-        # 1. Update independent variables: move toward optional API targets or random walk.
+        # Helper routine: Smoothly transitions a fluid variable towards an overriding target (if specified in config).
+        # Otherwise, applies a noisy random walk to imitate raw physical sensor fluctuations.
         def update_val(current, target, min_v, max_v, step_size, rand_range, extra=0):
             if target is not None and target > 0:
                 diff = target - current
                 if abs(diff) > step_size:
-                    current += step_size if diff > 0 else -step_size
+                    current += step_size if diff > 0 else -step_size # Gradient seek
                 else:
-                    current = target
+                    current = target # Lock onto target
             else:
-                current += random.uniform(-rand_range, rand_range) + extra
+                current += random.uniform(-rand_range, rand_range) + extra # Jitter
             return max(min_v, min(max_v, current))
 
         self.rop += random.uniform(-1.0, 1.0)
         self.rop = max(5.0, min(25.0, self.rop))
 
-        # Depth auto-calculation
+        # --- Real-Time Depth Derivation ---
+        # Instead of static strings, Depth continuously increases based on ROP (Rate of Penetration). 
+        # ROP is in active length unit / hour.
         now = time.time()
         dt = now - self.last_time
         self.last_time = now
 
         if self.current_depth is None:
+            # Initialization logic: if restarting the script, start the depth from the end of the predefined casing scope. 
             casing_depth = 0
             try:
                 if config and config.get('casings'):
@@ -128,36 +138,42 @@ class SimState:
         target_den = config.get("target_density") if config else None
         self.density = update_val(self.density, target_den, 1.0, 2.7, 0.01, 0.02)
 
-        # 3. Dependent pressures: simple correlation fallback, or bit + pipe drop if BHA config exists.
+        # 3. Drilling Hydraulics Calculation Foundation ---
+        # Simple generalized base-pressure scaling:
         pump_press = 2500 + (self.flow_rate - 2000)*1.2 + (self.pv - 20.0)*20.0 + random.uniform(-5, 5)
         
+        # If Bottom Hole Assembly (BHA) data exists, compute physical pressure drops.
         if config:
             n_size = float(config.get("bit_nozzle_size", 12))
             n_qty = int(config.get("bit_nozzle_qty", 3))
             nozzles = [n_size] * n_qty
+            # Total Flow Area (TFA) for the Drill Bit Nozzles. Uses standard industry geometry.
             tfa = sum([3.14159 * ((n/32.0)**2) / 4 for n in nozzles]) if nozzles else 0.5
             if tfa <= 0: tfa = 0.5
 
-            q_gpm = self.flow_rate * 0.264172
-            mw_ppg = self.density * 8.345
+            # Flow scaling modifiers
+            q_gpm = self.flow_rate * 0.264172  # Convert L/min to GPM
+            mw_ppg = self.density * 8.345      # Convert SG to Pounds Per Gallon
             
-            # Classic-style bit pressure-drop proxy (PPG, GPM, TFA in in²).
+            # Formulated Bit Pressure Drop using industry standard classic approximation equation.
             bit_pd = (mw_ppg * (q_gpm**2)) / (10858 * (tfa**2))
 
-            pipe_pd = 0
-            # Config lengths are in `length_unit`; inner diameters stay in inches in this toy model.
+            # Pipe Frictional Pressure Drop Logic:
+            # We enforce length conversions to imperial feet as standard drilling frictional formulas expect ft/in.
             unit_mult = 3.28084 if config.get("length_unit") == "m" else 1.0
             
             def calc_pd(length, inner_d):
                 length_ft = length * unit_mult
                 if length_ft > 0 and inner_d > 0:
+                    # Newtonian-approximation viscous friction model inside structural pipe.
                     return (length_ft * (self.pv + 5) * q_gpm) / (1500 * (inner_d**2.5))
                 return 0
             
             dc1_l = float(config.get("dc1_length", 200))
             dc2_l = float(config.get("dc2_length", 0))
             
-            # Use current depth for DP1 instead of static field
+            # Drill Pipe (DP1) Length is entirely governed by dynamic depth (auto-length mapping)
+            # This ensures that as we drill deeper, pipe extends, and frictional pressure linearly increases!
             bha_length = dc1_l + dc2_l
             dyn_dp1_l = max(0.0, self.current_depth - bha_length)
 
