@@ -116,7 +116,7 @@ class SimState:
         # rop is in unit/h. so dt is converted to hours
         self.current_depth += self.rop * (dt / 3600.0)
 
-        self.mud_level += random.uniform(-0.1, 0.1)
+        self.mud_level += random.uniform(-0.02, 0.02)
         self.mud_level = max(50.0, min(100.0, self.mud_level))
         
         target_flow = config.get("target_flow_rate") if config else None
@@ -177,6 +177,7 @@ class SimState:
             bha_length = dc1_l + dc2_l
             dyn_dp1_l = max(0.0, self.current_depth - bha_length)
 
+            pipe_pd = 0.0
             pipe_pd += calc_pd(dyn_dp1_l, config.get("dp1_id", 3.826))
             pipe_pd += calc_pd(dc1_l, config.get("dc1_id", 2.50))
             pipe_pd += calc_pd(dc2_l, config.get("dc2_id", 0))
