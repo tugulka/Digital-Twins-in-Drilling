@@ -53,9 +53,6 @@ npm run dev
 
 Vite'ın terminale yazdığı URL'yi açın (genellikle **http://localhost:5173**). Frontend, `http://localhost:5173` adresini çağıracak şekilde yapılandırılmıştır.
 
-## Opsiyonel: PDF metin çıkarımı
-
-`extract_pdf.py`, `pypdf` kullanarak makale PDF'inden metni `pdf_text.txt` dosyasına çıkarır (gerekirse script içindeki PDF dosya adını değiştirin).
 
 ## Proje yapısı
 
