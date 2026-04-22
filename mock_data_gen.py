@@ -45,6 +45,124 @@ def init_db():
 
 import json
 
+# Keep in sync with dashboard/src/hydraulics.js
+K_YP_IN_PIPE_TERM = 0.22
+
+
+def _visc_twin(pv, yp):
+    return float(pv) + 5.0 + K_YP_IN_PIPE_TERM * float(yp)
+
+
+def _friction_psi(length_ft, d_eff_in, q_gpm, viscous):
+    if length_ft <= 0 or d_eff_in <= 0 or q_gpm <= 0 or viscous <= 0:
+        return 0.0
+    return (length_ft * viscous * q_gpm) / (1500.0 * (d_eff_in ** 2.5))
+
+
+def _depth_m_to_native(depth_m, length_unit):
+    if depth_m is None:
+        return 0.0
+    d = float(depth_m)
+    if d < 0:
+        return 0.0
+    return d * 3.28084 if length_unit == "ft" else d
+
+
+def _parse_casings(config):
+    try:
+        c = json.loads(config.get("casings") or "[]")
+        return c if isinstance(c, list) else []
+    except Exception:
+        return []
+
+
+def _hole_id_at_md(md_native, casings, bit_diameter_in):
+    cand = []
+    for row in casings:
+        try:
+            s = float(row.get("start", 0))
+            e = float(row.get("end", 0))
+            cid = float(row.get("id", 0))
+        except (TypeError, ValueError):
+            continue
+        lo, hi = min(s, e), max(s, e)
+        if md_native >= lo and md_native < hi:
+            cand.append(cid)
+    if not cand:
+        return float(bit_diameter_in or 0)
+    return min(cand)
+
+
+def _pipe_geometry_at_md(md_native, depth_native, cfg):
+    dc1_l = float(cfg.get("dc1_length", 0) or 0)
+    dc2_l = float(cfg.get("dc2_length", 0) or 0)
+    dp_od = float(cfg.get("dp1_od", 0) or 0)
+    dc1_od = float(cfg.get("dc1_od", 0) or 0)
+    dc2_od = float(cfg.get("dc2_od", 0) or 0)
+    dp_id = float(cfg.get("dp1_id", 0) or 0)
+    dc1_id = float(cfg.get("dc1_id", 0) or 0)
+    dc2_id = float(cfg.get("dc2_id", 0) or 0)
+    if depth_native <= 0:
+        return dp_od, dp_id
+    top_dc2 = depth_native - dc2_l
+    top_dc1 = depth_native - dc2_l - dc1_l
+    if dc2_l > 0 and dc2_od > 0 and md_native > top_dc2:
+        return dc2_od, dc2_id
+    if dc1_l > 0 and dc1_od > 0 and md_native > top_dc1:
+        return dc1_od, dc1_id
+    return dp_od, dp_id
+
+
+def _collect_breakpoints(depth_native, casings, bha_len, dc1_l, dc2_l):
+    b = {0.0, depth_native}
+    for row in casings:
+        try:
+            s = float(row.get("start", 0))
+            e = float(row.get("end", 0))
+        except (TypeError, ValueError):
+            continue
+        lo, hi = min(s, e), max(s, e)
+        if 0 < lo < depth_native:
+            b.add(lo)
+        if 0 < hi < depth_native:
+            b.add(hi)
+    top_dc2 = depth_native - dc2_l
+    top_dc1 = depth_native - dc2_l - dc1_l
+    top_bha = depth_native - bha_len
+    for x in (top_dc2, top_dc1, top_bha):
+        if 0 < x < depth_native:
+            b.add(x)
+    return sorted(b)
+
+
+def _annulus_pressure_psi(config, depth_m, q_gpm, viscous, bit_diameter_in):
+    length_unit = config.get("length_unit") or "m"
+    unit_mult = 3.28084 if length_unit == "m" else 1.0
+    depth_native = _depth_m_to_native(depth_m, length_unit)
+    if depth_native <= 0:
+        return 0.0
+    casings = _parse_casings(config)
+    dc1_l = float(config.get("dc1_length", 0) or 0)
+    dc2_l = float(config.get("dc2_length", 0) or 0)
+    bha_len = dc1_l + dc2_l
+    eps = 0.01
+    bps = _collect_breakpoints(depth_native, casings, bha_len, dc1_l, dc2_l)
+    total = 0.0
+    for i in range(len(bps) - 1):
+        md0, md1 = bps[i], bps[i + 1]
+        len_native = md1 - md0
+        if len_native <= 0:
+            continue
+        mid = (md0 + md1) / 2.0
+        hole_id = _hole_id_at_md(mid, casings, bit_diameter_in)
+        pipe_od, _ = _pipe_geometry_at_md(mid, depth_native, config)
+        d_ann = hole_id - pipe_od
+        if d_ann <= eps:
+            continue
+        total += _friction_psi(len_native * unit_mult, d_ann, q_gpm, viscous)
+    return total
+
+
 class SimState:
     def __init__(self):
         # Slowly drifting “surface” and mud properties (random walk or toward API targets).
@@ -161,12 +279,13 @@ class SimState:
             # Pipe Frictional Pressure Drop Logic:
             # We enforce length conversions to imperial feet as standard drilling frictional formulas expect ft/in.
             unit_mult = 3.28084 if config.get("length_unit") == "m" else 1.0
+            visc = _visc_twin(self.pv, self.yp)
             
             def calc_pd(length, inner_d):
                 length_ft = length * unit_mult
                 if length_ft > 0 and inner_d > 0:
                     # Newtonian-approximation viscous friction model inside structural pipe.
-                    return (length_ft * (self.pv + 5) * q_gpm) / (1500 * (inner_d**2.5))
+                    return (length_ft * visc * q_gpm) / (1500 * (inner_d**2.5))
                 return 0
             
             dc1_l = float(config.get("dc1_length", 200))
@@ -182,7 +301,10 @@ class SimState:
             pipe_pd += calc_pd(dc1_l, config.get("dc1_id", 2.50))
             pipe_pd += calc_pd(dc2_l, config.get("dc2_id", 0))
 
-            pump_press = bit_pd + pipe_pd + random.uniform(-5, 5)
+            bit_d = float(config.get("bit_diameter", 8.5))
+            annulus_pd = _annulus_pressure_psi(config, self.current_depth, q_gpm, visc, bit_d)
+
+            pump_press = bit_pd + pipe_pd + annulus_pd + random.uniform(-5, 5)
 
         pump_press = max(100.0, min(8000.0, pump_press))
         
