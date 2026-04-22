@@ -41,7 +41,7 @@ Veritabanının sürekli güncellenmesi için bu süreci açık bırakın.
 python server.py
 ```
 
-API, **http://localhost:8000** adresinde çalışır (`server.py` içindeki `uvicorn.run` satırına bakabilirsiniz).
+API, **http://localhost:5173** adresinde çalışır (`server.py` içindeki `uvicorn.run` satırına bakabilirsiniz).
 
 ### 4. Dashboard'u başlatın (terminal 3)
 
@@ -51,11 +51,8 @@ npm install
 npm run dev
 ```
 
-Vite'ın terminale yazdığı URL'yi açın (genellikle **http://localhost:5173**). Frontend, `http://localhost:8000` adresini çağıracak şekilde yapılandırılmıştır.
+Vite'ın terminale yazdığı URL'yi açın (genellikle **http://localhost:5173**). Frontend, `http://localhost:5173` adresini çağıracak şekilde yapılandırılmıştır.
 
-## Opsiyonel: PDF metin çıkarımı
-
-`extract_pdf.py`, `pypdf` kullanarak makale PDF'inden metni `pdf_text.txt` dosyasına çıkarır (gerekirse script içindeki PDF dosya adını değiştirin).
 
 ## Proje yapısı
 
