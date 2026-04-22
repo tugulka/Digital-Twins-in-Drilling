@@ -46,9 +46,12 @@ const DICTIONARY = {
     density_label: "YOĞUNLUK",
     density_name: "Çamur Yoğunluğu",
     local_time_label: "YEREL SAAT",
+    alarm_influx: "KICK / INFLUX (Kuyu İçi Akış)",
+    alarm_loss: "ÇAMUR KAÇAĞI (Mud Loss)",
     alarm_volume: "Anormal Hacim Hareketi",
     alarm_dismiss: "MÜDAHALE ET / SUSTUR",
-    alarm_thresh_title: "Alarm Eşiği",
+    alarm_thresh_influx: "Influx Eşiği",
+    alarm_thresh_loss: "Kaçak Eşiği",
     alarm_dev: "sapma"
   },
   EN: {
@@ -86,9 +89,12 @@ const DICTIONARY = {
     density_label: "DENSITY",
     density_name: "Mud Density",
     local_time_label: "LOCAL TIME",
+    alarm_influx: "KICK / INFLUX",
+    alarm_loss: "MUD LOSS",
     alarm_volume: "Abnormal Volume Movement",
     alarm_dismiss: "ACKNOWLEDGE / MUTE",
-    alarm_thresh_title: "Alarm Threshold",
+    alarm_thresh_influx: "Influx Threshold",
+    alarm_thresh_loss: "Loss Threshold",
     alarm_dev: "deviation"
   }
 };
@@ -240,9 +246,13 @@ function TankCard({ sensor, value, previousValue, bhaConfig, latest, onClick, t 
 
   // --- Configuration States ---
   const [dim, setDim] = useState({ length: 12, width: 3.5, height: 2.5 }); // Tank dimensions
-  const [alarmThreshold, setAlarmThreshold] = useState(1.0); // Allowable deviation before sounding alarm (in chosen volUnit/h)
-  const [isAlarmActive, setIsAlarmActive] = useState(false); // Indicates active alarm state
+  const [alarmThresholdInflux, setAlarmThresholdInflux] = useState(1.0);
+  const [alarmThresholdLoss, setAlarmThresholdLoss] = useState(1.0);
+  const [influxAlarmSet, setInfluxAlarmSet] = useState(false);
+  const [lossAlarmSet, setLossAlarmSet] = useState(false);
+  const [activeAlarmType, setActiveAlarmType] = useState(null); // 'influx', 'loss', or null
   const [isAlarmMuted, setIsAlarmMuted] = useState(false); // User overrides alarm pop-up
+  const [lastAlarmTime, setLastAlarmTime] = useState(0); // Tracks cooldown
 
   // --- Internal Data History ---
   // Rather than relying on the graph's chartData (which breaks if not selected), 
@@ -337,23 +347,44 @@ function TankCard({ sensor, value, previousValue, bhaConfig, latest, onClick, t 
       // Cast the M^3 result into the specific active volume unit (bbl, gal) to maintain 1:1 scale mathematically
       const expectedDisplacementUnit_h = volFromM3(expectedRockLoss_m3_h, volUnit);
       
-      // Measure deviance explicitly against physics bounds. E.g if expected loss is -10, and real rate is -12, displacement dev=2.
-      const deviance = Math.abs(currentRate - expectedDisplacementUnit_h);
+      // Real rate vs expected loss
+      const difference = currentRate - expectedDisplacementUnit_h;
       
-      if (deviance > alarmThreshold) {
-          if (!isAlarmMuted) setIsAlarmActive(true);
+      let nextAlarmType = null;
+      if (influxAlarmSet && difference > alarmThresholdInflux) {
+          nextAlarmType = 'influx';
+      } else if (lossAlarmSet && difference < -alarmThresholdLoss) {
+          nextAlarmType = 'loss';
+      }
+      
+      const now = Date.now();
+      const canTriggerNewAlarm = (now - lastAlarmTime) >= 60000;
+
+      if (nextAlarmType) {
+          if (activeAlarmType !== nextAlarmType) {
+              if (canTriggerNewAlarm) {
+                  setActiveAlarmType(nextAlarmType);
+                  setLastAlarmTime(now);
+                  setIsAlarmMuted(false);
+              } else if (activeAlarmType !== null) {
+                  setActiveAlarmType(null);
+                  setIsAlarmMuted(false);
+              }
+          }
       } else {
-          setIsAlarmActive(false);
+          setActiveAlarmType(null);
           setIsAlarmMuted(false); // Reset mute layer returning to safety
       }
-  }, [currentRate, bhaConfig, latest, volUnit, alarmThreshold, isAlarmMuted, localHistory.length]);
+  }, [currentRate, bhaConfig, latest, volUnit, alarmThresholdInflux, alarmThresholdLoss, influxAlarmSet, lossAlarmSet, isAlarmMuted, activeAlarmType, lastAlarmTime, localHistory.length]);
 
   // Utility to handle alarm dismissal popup
   const handleAcknowledgeAlarm = (e) => {
       e.stopPropagation();
-      setIsAlarmActive(false);
+      setActiveAlarmType(null);
       setIsAlarmMuted(true);
   };
+
+  const isAlarmActive = activeAlarmType !== null;
 
   return (
     <div className="sensor-card">
@@ -369,26 +400,35 @@ function TankCard({ sensor, value, previousValue, bhaConfig, latest, onClick, t 
       </div>
 
       <div className="tank-container" style={{ position: 'relative' }}>
-        <div className={`tank-visual-wrapper ${changed ? 'value-changed' : ''}`} onClick={onClick} style={{ borderColor: isAlarmActive ? 'var(--danger)' : 'var(--panel-border)', boxShadow: isAlarmActive ? '0 0 15px rgba(239, 68, 68, 0.6)' : 'none', transition: 'all 0.3s' }}>
-           <div className="tank-level" style={{ height: `${pct}%`, background: isAlarmActive ? 'rgba(239, 68, 68, 0.6)' : 'rgba(56, 189, 248, 0.4)' }} />
-           <div className="tank-level-text" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-             <span>{pct.toFixed(1)}%</span>
-             {rateStr && (
-                 <span style={{ fontSize: '0.85rem', marginTop: '0.3rem', color: isGain ? '#10b981' : (isLoss ? '#ef4444' : '#9ca3af'), textShadow: '1px 1px 2px #000' }}>
-                    {rateStr}
-                 </span>
+         {(() => {
+           const alarmColor = activeAlarmType === 'influx' ? '#f59e0b' : 'var(--danger)';
+           const alarmRgba = activeAlarmType === 'influx' ? 'rgba(245, 158, 11, 0.6)' : 'rgba(239, 68, 68, 0.6)';
+           const alarmTitle = activeAlarmType === 'influx' ? t.alarm_influx : (activeAlarmType === 'loss' ? t.alarm_loss : '');
+           return (
+             <React.Fragment>
+             <div className={`tank-visual-wrapper ${changed ? 'value-changed' : ''}`} onClick={onClick} style={{ borderColor: isAlarmActive ? alarmColor : 'var(--panel-border)', boxShadow: isAlarmActive ? `0 0 15px ${alarmRgba}` : 'none', transition: 'all 0.3s' }}>
+                <div className="tank-level" style={{ height: `${pct}%`, background: isAlarmActive ? alarmRgba : 'rgba(56, 189, 248, 0.4)' }} />
+                <div className="tank-level-text" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                  <span>{pct.toFixed(1)}%</span>
+                  {rateStr && (
+                      <span style={{ fontSize: '0.85rem', marginTop: '0.3rem', color: isGain ? '#10b981' : (isLoss ? '#ef4444' : '#9ca3af'), textShadow: '1px 1px 2px #000' }}>
+                         {rateStr}
+                      </span>
+                  )}
+                </div>
+             </div>
+             
+             {/* Render a critical alert badge covering the tank if alarm is deployed */}
+             {isAlarmActive && (
+                 <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', background: 'rgba(0,0,0,0.6)', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', borderRadius: '8px', zIndex: 10 }}>
+                    <span style={{ color: alarmColor, fontWeight: 'bold', fontSize: '1.2rem', animation: 'pulse 1s infinite', textAlign: 'center' }}>{alarmTitle}</span>
+                    <span style={{ color: '#fff', fontSize: '0.8rem', textAlign: 'center', margin: '0.5rem' }}>{t.alarm_volume}</span>
+                    <button onClick={handleAcknowledgeAlarm} style={{ background: 'var(--warning)', border: 'none', color: '#000', padding: '0.4rem 1rem', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold', marginTop: '0.5rem', textAlign: 'center' }}>{t.alarm_dismiss}</button>
+                 </div>
              )}
-           </div>
-        </div>
-        
-        {/* Render a critical alert badge covering the tank if alarm is deployed */}
-        {isAlarmActive && (
-            <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', background: 'rgba(0,0,0,0.6)', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', borderRadius: '8px', zIndex: 10 }}>
-               <span style={{ color: 'var(--danger)', fontWeight: 'bold', fontSize: '1.4rem', animation: 'pulse 1s infinite' }}>ALARM</span>
-               <span style={{ color: '#fff', fontSize: '0.8rem', textAlign: 'center', margin: '0.5rem' }}>{t.alarm_volume}</span>
-               <button onClick={handleAcknowledgeAlarm} style={{ background: 'var(--warning)', border: 'none', color: '#000', padding: '0.4rem 1rem', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold', marginTop: '0.5rem', textAlign: 'center' }}>{t.alarm_dismiss}</button>
-            </div>
-        )}
+             </React.Fragment>
+           );
+         })()}
         
         <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', display: 'flex', justifyContent: 'space-between', padding: '0 0.2rem' }}>
            <span>{currentVolume.toFixed(1)} {volUnit}</span>
@@ -423,11 +463,26 @@ function TankCard({ sensor, value, previousValue, bhaConfig, latest, onClick, t 
                  <input type="number" step="0.1" value={dim.height} onChange={e => setDim({...dim, height: Number(e.target.value)})} title={t.tank_h}/>
              </div>
 
-             <div style={{ padding: '0.5rem', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: '6px' }}>
-                 <div style={{ fontSize: '0.75rem', color: 'var(--danger)', marginBottom: '0.3rem', fontWeight: 'bold' }}>{t.alarm_thresh_title}</div>
-                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                     <input type="number" step="0.5" value={alarmThreshold} onChange={e => setAlarmThreshold(Number(e.target.value))} style={{ width: '4rem', padding: '0.2rem', background: 'var(--bg-dark)', border: '1px solid var(--panel-border)', color: '#fff', fontSize: '0.8rem' }} />
-                     <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{volUnit}/h {t.alarm_dev}</span>
+             <div style={{ padding: '0.5rem', background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '6px', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.4rem' }}>
+                     <div style={{ fontSize: '0.75rem', color: '#f59e0b', fontWeight: 'bold' }}>{t.alarm_thresh_influx || 'Influx'}</div>
+                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                         <input type="number" step="0.5" disabled={influxAlarmSet} value={alarmThresholdInflux} onChange={e => setAlarmThresholdInflux(Number(e.target.value))} style={{ width: '3.5rem', padding: '0.2rem', background: influxAlarmSet ? 'rgba(255,255,255,0.1)' : 'var(--bg-dark)', border: '1px solid var(--panel-border)', color: influxAlarmSet ? '#9ca3af' : '#fff', fontSize: '0.8rem' }} />
+                         <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{volUnit}/h</span>
+                         <button onClick={(e) => { e.stopPropagation(); setInfluxAlarmSet(!influxAlarmSet); }} style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem', background: influxAlarmSet ? 'rgba(239, 68, 68, 0.2)' : 'rgba(16, 185, 129, 0.2)', color: influxAlarmSet ? 'var(--danger)' : 'var(--success)', border: 'none', borderRadius: '4px', cursor: 'pointer', outline: 'none' }}>
+                            {influxAlarmSet ? 'Kapat / Off' : 'Ayarla / Set'}
+                         </button>
+                     </div>
+                 </div>
+                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.4rem' }}>
+                     <div style={{ fontSize: '0.75rem', color: 'var(--danger)', fontWeight: 'bold' }}>{t.alarm_thresh_loss || 'Loss'}</div>
+                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                         <input type="number" step="0.5" disabled={lossAlarmSet} value={alarmThresholdLoss} onChange={e => setAlarmThresholdLoss(Number(e.target.value))} style={{ width: '3.5rem', padding: '0.2rem', background: lossAlarmSet ? 'rgba(255,255,255,0.1)' : 'var(--bg-dark)', border: '1px solid var(--panel-border)', color: lossAlarmSet ? '#9ca3af' : '#fff', fontSize: '0.8rem' }} />
+                         <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{volUnit}/h</span>
+                         <button onClick={(e) => { e.stopPropagation(); setLossAlarmSet(!lossAlarmSet); }} style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem', background: lossAlarmSet ? 'rgba(239, 68, 68, 0.2)' : 'rgba(16, 185, 129, 0.2)', color: lossAlarmSet ? 'var(--danger)' : 'var(--success)', border: 'none', borderRadius: '4px', cursor: 'pointer', outline: 'none' }}>
+                            {lossAlarmSet ? 'Kapat / Off' : 'Ayarla / Set'}
+                         </button>
+                     </div>
                  </div>
              </div>
           </div>
@@ -1097,35 +1152,35 @@ function App() {
              <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '1.5rem', marginBottom: '1.5rem', borderBottom: '1px solid var(--panel-border)', paddingBottom: '1.5rem' }}>
                 <div style={{ background: 'rgba(0,0,0,0.2)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--panel-border)' }}>
                     <h4 style={{ color: 'var(--accent-color)', marginBottom: '0.8rem', display: 'flex', justifyContent: 'space-between' }}>
-                        Casing Profile
-                        <button onClick={addCasing} style={{ background: 'transparent', border:'1px solid var(--accent-color)', color: 'var(--accent-color)', borderRadius: '4px', cursor: 'pointer', fontSize: '0.75rem', padding: '0.1rem 0.5rem' }}>+ Ekle</button>
+                        {lang === 'TR' ? 'Muhafaza Borusu (Casing) Profili' : 'Casing Profile'}
+                        <button onClick={addCasing} style={{ background: 'transparent', border:'1px solid var(--accent-color)', color: 'var(--accent-color)', borderRadius: '4px', cursor: 'pointer', fontSize: '0.75rem', padding: '0.1rem 0.5rem' }}>+ {lang === 'TR' ? 'Ekle' : 'Add'}</button>
                     </h4>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                        {parsedCasings.map((c, i) => (
                           <div key={i} style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', background: 'var(--bg-dark)', padding: '0.5rem', borderRadius: '4px' }}>
                              <div style={{ flex: 1 }}>
-                                 <label style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'block' }}>Başlangıç ({bhaConfig.length_unit})</label>
+                                 <label style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'block' }}>{lang === 'TR' ? 'Başlangıç' : 'Start'} ({bhaConfig.length_unit})</label>
                                  <input type="number" step="10" value={c.start} onChange={e => updateCasing(i, 'start', e.target.value)} style={{ width: '100%', padding: '0.3rem', borderRadius: '4px', background: 'transparent', border: '1px solid var(--panel-border)', color: '#fff', fontSize: '0.8rem' }} />
                              </div>
                              <div style={{ flex: 1 }}>
-                                 <label style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'block' }}>Bitiş ({bhaConfig.length_unit})</label>
+                                 <label style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'block' }}>{lang === 'TR' ? 'Bitiş' : 'End'} ({bhaConfig.length_unit})</label>
                                  <input type="number" step="10" value={c.end} onChange={e => updateCasing(i, 'end', e.target.value)} style={{ width: '100%', padding: '0.3rem', borderRadius: '4px', background: 'transparent', border: '1px solid var(--panel-border)', color: '#fff', fontSize: '0.8rem' }} />
                              </div>
                              <div style={{ flex: 1 }}>
-                                 <label style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'block' }}>Boru ID (in)</label>
+                                 <label style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'block' }}>{lang === 'TR' ? 'Boru' : 'Pipe'} ID (in)</label>
                                  <input type="number" step="0.1" value={c.id} onChange={e => updateCasing(i, 'id', e.target.value)} style={{ width: '100%', padding: '0.3rem', borderRadius: '4px', background: 'transparent', border: '1px solid var(--panel-border)', color: '#fff', fontSize: '0.8rem' }} />
                              </div>
-                             <button onClick={() => removeCasing(i)} style={{ background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', alignSelf: 'flex-end', marginBottom: '0.3rem' }} title="Sil">✕</button>
+                             <button onClick={() => removeCasing(i)} style={{ background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', alignSelf: 'flex-end', marginBottom: '0.3rem' }} title={lang === 'TR' ? 'Sil' : 'Delete'}>✕</button>
                           </div>
                        ))}
-                       {parsedCasings.length === 0 && <span style={{fontSize:'0.8rem', color:'var(--text-secondary)'}}>No casings defined.</span>}
+                       {parsedCasings.length === 0 && <span style={{fontSize:'0.8rem', color:'var(--text-secondary)'}}>{lang === 'TR' ? 'Tanımlı muhafaza borusu yok.' : 'No casings defined.'}</span>}
                     </div>
                 </div>
 
                 <div style={{ background: 'rgba(0,0,0,0.2)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--panel-border)', display: 'grid', gridTemplateColumns: '1fr', gap: '1rem' }}>
                     <div style={{gridColumn: '1'}}>
                         <h4 style={{ color: 'var(--success)', marginBottom: '0.8rem' }}>Drill Pipe (DP)</h4>
-                        <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>NOT: Drill Pipe uzunluğu, Anlık Kuyu Derinliği (Current Depth) tespiti yapılarak otomatik hesaplanmaktadır.</span>
+                        <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{lang === 'TR' ? 'NOT: Drill Pipe uzunluğu, Anlık Kuyu Derinliği (Current Depth) tespiti yapılarak otomatik hesaplanmaktadır.' : 'NOTE: Drill Pipe length is calculated automatically based on continuous Current Depth tracking.'}</span>
                     </div>
                     {/* DP-1 */}
                     <div style={{ background: 'var(--bg-dark)', padding: '0.5rem', borderRadius: '6px' }}>
@@ -1146,7 +1201,7 @@ function App() {
                     {/* DC-1 */}
                     <div style={{ background: 'var(--bg-dark)', padding: '0.5rem', borderRadius: '6px' }}>
                         <h5 style={{ color: 'var(--text-primary)', marginBottom: '0.4rem', borderBottom: '1px solid #333', paddingBottom: '0.2rem' }}>DC Segment 1</h5>
-                        <div><label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Uzunluk ({bhaConfig.length_unit})</label> <input type="number" value={bhaConfig.dc1_length} onChange={e => setBhaConfig({...bhaConfig, dc1_length: Number(e.target.value)})} style={{ width:'100%', padding: '0.3rem', marginBottom: '0.3rem', background: 'transparent', border: '1px solid var(--panel-border)', color: '#fff' }} /></div>
+                        <div><label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{lang === 'TR' ? 'Uzunluk' : 'Length'} ({bhaConfig.length_unit})</label> <input type="number" value={bhaConfig.dc1_length} onChange={e => setBhaConfig({...bhaConfig, dc1_length: Number(e.target.value)})} style={{ width:'100%', padding: '0.3rem', marginBottom: '0.3rem', background: 'transparent', border: '1px solid var(--panel-border)', color: '#fff' }} /></div>
                         <div style={{ display: 'flex', gap: '0.5rem' }}>
                            <div style={{ flex: 1 }}><label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>ID (in)</label> <input type="number" step="0.01" value={bhaConfig.dc1_id} onChange={e => setBhaConfig({...bhaConfig, dc1_id: Number(e.target.value)})} style={{ width:'100%', padding: '0.3rem', background: 'transparent', border: '1px solid var(--panel-border)', color: '#fff' }} /></div>
                            <div style={{ flex: 1 }}><label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>OD (in)</label> <input type="number" step="0.01" value={bhaConfig.dc1_od} onChange={e => setBhaConfig({...bhaConfig, dc1_od: Number(e.target.value)})} style={{ width:'100%', padding: '0.3rem', background: 'transparent', border: '1px solid var(--panel-border)', color: '#fff' }} /></div>
@@ -1155,7 +1210,7 @@ function App() {
                     {/* DC-2 */}
                     <div style={{ background: 'var(--bg-dark)', padding: '0.5rem', borderRadius: '6px' }}>
                         <h5 style={{ color: 'var(--text-primary)', marginBottom: '0.4rem', borderBottom: '1px solid #333', paddingBottom: '0.2rem' }}>DC Segment 2</h5>
-                        <div><label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Uzunluk ({bhaConfig.length_unit})</label> <input type="number" value={bhaConfig.dc2_length} onChange={e => setBhaConfig({...bhaConfig, dc2_length: Number(e.target.value)})} style={{ width:'100%', padding: '0.3rem', marginBottom: '0.3rem', background: 'transparent', border: '1px solid var(--panel-border)', color: '#fff' }} /></div>
+                        <div><label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{lang === 'TR' ? 'Uzunluk' : 'Length'} ({bhaConfig.length_unit})</label> <input type="number" value={bhaConfig.dc2_length} onChange={e => setBhaConfig({...bhaConfig, dc2_length: Number(e.target.value)})} style={{ width:'100%', padding: '0.3rem', marginBottom: '0.3rem', background: 'transparent', border: '1px solid var(--panel-border)', color: '#fff' }} /></div>
                         <div style={{ display: 'flex', gap: '0.5rem' }}>
                            <div style={{ flex: 1 }}><label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>ID (in)</label> <input type="number" step="0.01" value={bhaConfig.dc2_id} onChange={e => setBhaConfig({...bhaConfig, dc2_id: Number(e.target.value)})} style={{ width:'100%', padding: '0.3rem', background: 'transparent', border: '1px solid var(--panel-border)', color: '#fff' }} /></div>
                            <div style={{ flex: 1 }}><label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>OD (in)</label> <input type="number" step="0.01" value={bhaConfig.dc2_od} onChange={e => setBhaConfig({...bhaConfig, dc2_od: Number(e.target.value)})} style={{ width:'100%', padding: '0.3rem', background: 'transparent', border: '1px solid var(--panel-border)', color: '#fff' }} /></div>
@@ -1164,19 +1219,19 @@ function App() {
                 </div>
 
                 <div style={{ background: 'rgba(0,0,0,0.2)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--panel-border)' }}>
-                    <h4 style={{ color: 'var(--warning)', marginBottom: '0.8rem' }}>Matkap (Bit)</h4>
+                    <h4 style={{ color: 'var(--warning)', marginBottom: '0.8rem' }}>{lang === 'TR' ? 'Matkap (Bit)' : 'Drill Bit'}</h4>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                         <div>
-                            <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '0.3rem' }}>Çap (in)</label>
+                            <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '0.3rem' }}>{lang === 'TR' ? 'Çap' : 'Diameter'} (in)</label>
                             <input type="number" step="0.1" value={bhaConfig.bit_diameter} onChange={e => setBhaConfig({...bhaConfig, bit_diameter: Number(e.target.value)})} style={{ width: '100%', padding: '0.5rem', borderRadius: '4px', background: 'var(--bg-dark)', border: '1px solid var(--panel-border)', color: '#fff' }} />
                         </div>
                         <div style={{ display: 'flex', gap: '0.5rem' }}>
                             <div style={{ flex: 1 }}>
-                                <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '0.3rem' }}>Nozzle Sayısı</label>
+                                <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '0.3rem' }}>{lang === 'TR' ? 'Nozzle Sayısı' : 'Nozzle Quantity'}</label>
                                 <input type="number" step="1" value={bhaConfig.bit_nozzle_qty} onChange={e => setBhaConfig({...bhaConfig, bit_nozzle_qty: Number(e.target.value)})} style={{ width: '100%', padding: '0.5rem', borderRadius: '4px', background: 'var(--bg-dark)', border: '1px solid var(--panel-border)', color: '#fff' }} />
                             </div>
                             <div style={{ flex: 1 }}>
-                                <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '0.3rem' }}>Nozzle Size (/32)</label>
+                                <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '0.3rem' }}>{lang === 'TR' ? 'Nozzle Boyutu' : 'Nozzle Size'} (/32)</label>
                                 <input type="number" step="1" value={bhaConfig.bit_nozzle_size} onChange={e => setBhaConfig({...bhaConfig, bit_nozzle_size: Number(e.target.value)})} style={{ width: '100%', padding: '0.5rem', borderRadius: '4px', background: 'var(--bg-dark)', border: '1px solid var(--panel-border)', color: '#fff' }} />
                             </div>
                         </div>
@@ -1185,14 +1240,14 @@ function App() {
              </div>
 
              <div style={{ marginTop: '2rem', display: 'flex', justifyContent: 'flex-end', gap: '1rem' }}>
-                 <button onClick={() => setShowBHAConfig(false)} style={{ padding: '0.6rem 2rem', background: 'transparent', border: '1px solid var(--text-secondary)', color: 'var(--text-secondary)', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}>İptal</button>
+                 <button onClick={() => setShowBHAConfig(false)} style={{ padding: '0.6rem 2rem', background: 'transparent', border: '1px solid var(--text-secondary)', color: 'var(--text-secondary)', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}>{lang === 'TR' ? 'İptal' : 'Cancel'}</button>
                  <button onClick={() => {
                      fetch('http://localhost:8000/api/config', { 
                         method: 'POST', 
                         headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify(bhaConfig)
                      }).then(() => setShowBHAConfig(false));
-                 }} style={{ padding: '0.6rem 2rem', background: 'var(--accent-color)', border: 'none', color: '#000', fontWeight: 'bold', borderRadius: '6px', cursor: 'pointer' }}>Kaydet & Uygula</button>
+                 }} style={{ padding: '0.6rem 2rem', background: 'var(--accent-color)', border: 'none', color: '#000', fontWeight: 'bold', borderRadius: '6px', cursor: 'pointer' }}>{lang === 'TR' ? 'Kaydet & Uygula' : 'Save & Apply'}</button>
              </div>
           </div>
         </div>
