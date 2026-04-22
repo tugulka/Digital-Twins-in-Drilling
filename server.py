@@ -1,9 +1,16 @@
 """
-HTTP API for the drilling dashboard. Reads/writes SQLite (`sensor_data.db`):
-- Features a lightweight FastAPI backend routing.
-- Rows are appended continuously by the physics simulator (`mock_data_gen.py`).
-- `GET /api/latest-data` and `GET /api/history` feed the React charts and cards natively.
-- `GET /api/config` and `POST /api/config` store BHA/wellbore properties to influence simulation physics.
+HTTP API for the drilling dashboard. Reads/writes SQLite (`sensor_data.db`).
+
+Responsibilities:
+    - Serve the latest sensor row for 1 Hz dashboard polling (`/api/latest-data`).
+    - Serve downsampled history for Recharts (`/api/history`) so long windows do not overload the browser.
+    - Persist BHA / casing / bit configuration (`sim_config`) so `mock_data_gen.py` picks it up on the next tick.
+
+Process model:
+    Run **after** `mock_data_gen.py` has created tables; `POST /api/config` recreates `sim_config` with a single row (id=1).
+
+Listen address:
+    `uvicorn` binds `0.0.0.0:8000` at the bottom of this file.
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,7 +23,12 @@ from typing import Optional
 
 app = FastAPI()
 
+
 class SimConfig(BaseModel):
+    """
+    Payload for `POST /api/config`: mirrors the keys the React Wellbore & BHA modal edits.
+    Optional target_* fields are legacy hooks for the simulator to bias density / YP / flow.
+    """
     target_density: Optional[float] = None
     target_yp: Optional[float] = None
     target_flow_rate: Optional[float] = None

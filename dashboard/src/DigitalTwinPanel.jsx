@@ -1,9 +1,25 @@
-﻿import React, { useState } from 'react';
+﻿/**
+ * @fileoverview Digital twin **preview** modals (density, rheology, flow, nozzle).
+ * Opens from the “Değiştir / Change” strip in `App.jsx`. Does **not** POST targets to the API;
+ * all pressures are what-if values computed with {@link computeHydraulicsPsi} using edited inputs
+ * plus live telemetry for untouched fields. Remount per `activeChangeParam` via `key` in parent
+ * so local form state resets when switching modes.
+ */
+
+import React, { useState } from 'react';
 import { computeHydraulicsPsi, viscTwin } from './hydraulics';
 
+/** Specific gravity of calcite weighting agent (for kg/ton mud recipe estimate). */
 const CALCITE_SG = 2.7;
+/** Specific gravity of barite weighting agent. */
 const BARITE_SG = 4.2;
 
+/**
+ * Normalize user-entered density to specific gravity.
+ * @param {string|number} val Raw input
+ * @param {'SG'|'lb/gal'|'lb/ft³'} unit Input unit selector
+ * @returns {number|null} SG or null if invalid
+ */
 function densityInputToSg(val, unit) {
   let v = Number(val);
   if (!Number.isFinite(v)) return null;
@@ -12,7 +28,11 @@ function densityInputToSg(val, unit) {
   return v;
 }
 
-/** Empty or invalid → null (use live/base). */
+/**
+ * Parse optional numeric field: blank string means “use live / base telemetry”, not zero.
+ * @param {string} str
+ * @returns {number|null}
+ */
 function parseOptionalNumber(str) {
   const s = String(str ?? '').trim();
   if (s === '') return null;
@@ -20,18 +40,34 @@ function parseOptionalNumber(str) {
   return Number.isFinite(n) ? n : null;
 }
 
+/** Convert tank dimension from cm or ft to meters for volume math. */
 function toMetersTank(val, maxUnit) {
   if (maxUnit === 'cm') return val / 100;
   if (maxUnit === 'ft') return val * 0.3048;
   return val;
 }
 
+/** Display overflow volume in user-selected pit unit. */
 function volFromM3Twin(m3, targetVolUnit) {
   if (targetVolUnit === 'gal') return m3 * 264.172;
   if (targetVolUnit === 'bbl') return m3 * 6.28981;
   return m3;
 }
 
+/**
+ * @param {object} props
+ * @param {'density'|'yp'|'flow'|'nozzle'} props.activeChangeParam Which scenario tab is active
+ * @param {() => void} props.onClose Close handler (overlay click or button)
+ * @param {object} props.t Localized strings from `DICTIONARY[lang]`
+ * @param {object} props.units Current display unit bundle (density, pressure, …)
+ * @param {object|null} props.globalLatest Last `/api/latest-data` row (base PV, flow, depth, …)
+ * @param {object} props.bhaConfig Casing + string + bit fields (shared with Wellbore modal)
+ * @param {{length:number,width:number,height:number}} props.tankDim Pit dimensions for overflow estimate
+ * @param {string} props.tankDimUnit 'm' | 'cm' | 'ft'
+ * @param {string} props.tankVolUnit 'm³' | 'gal' | 'bbl'
+ * @param {number} props.maxPumpPressurePsi User-set trip / pump limit (PSI) from `App` state
+ * @param {(psi:number)=>number} props.toDisplayPressure Convert PSI to selected pressure unit for labels
+ */
 export function DigitalTwinPanel({
   activeChangeParam, onClose, t, units, globalLatest, bhaConfig,
   tankDim, tankDimUnit, tankVolUnit, maxPumpPressurePsi, toDisplayPressure,
@@ -44,6 +80,7 @@ export function DigitalTwinPanel({
   const [targetFlowStr, setTargetFlowStr] = useState('');
   const [targetNozzleStr, setTargetNozzleStr] = useState('');
 
+  // --- Live telemetry used as defaults when preview fields are left empty ---
   const depthM = globalLatest?.Current_Depth_m != null ? Number(globalLatest.Current_Depth_m) : 0;
   const baseFlow = globalLatest?.Flow_Rate_lpm != null ? Number(globalLatest.Flow_Rate_lpm) : 0;
   const basePv = globalLatest?.Plastic_Viscosity != null ? Number(globalLatest.Plastic_Viscosity) : 0;
@@ -53,6 +90,7 @@ export function DigitalTwinPanel({
 
   const baseNozzle = Number(bhaConfig?.bit_nozzle_size ?? 12);
   const targetFlow = activeChangeParam === 'flow' ? parseOptionalNumber(targetFlowStr) : null;
+  // Floor at 100 L/min matches legacy simulator stability (same as previous delta-based UI).
   const simFlow = Math.max(100, targetFlow != null ? targetFlow : baseFlow);
   const targetPv = activeChangeParam === 'yp' ? parseOptionalNumber(targetPvStr) : null;
   const targetYp = activeChangeParam === 'yp' ? parseOptionalNumber(targetYpStr) : null;
@@ -71,6 +109,7 @@ export function DigitalTwinPanel({
   const pumpPsi = hyd.pumpPsi;
   const pumpOver = pumpPsi > maxPumpPressurePsi;
 
+  // --- Density mode: solids loading (kg per metric ton of mud) + pit freeboard overflow (m³) ---
   const sgSolid = agent === 'calcite' ? CALCITE_SG : BARITE_SG;
   let kgPerTon = null;
   let overflowVol = null;
@@ -99,6 +138,7 @@ export function DigitalTwinPanel({
         <button className="modal-close" type="button" onClick={onClose}>{t.close}</button>
         <h2 style={{ marginBottom: '0.5rem', color: 'var(--warning)' }}>🎛️ {title}</h2>
         <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>{t.twin_note}</p>
+        {/* Mode: target mud weight + weighting agent */}
         {activeChangeParam === 'density' && (
           <div style={{ marginBottom: '1rem' }}>
             <div style={{ marginBottom: '0.6rem', fontSize: '0.85rem' }}>{t.twin_agent}</div>
@@ -123,6 +163,7 @@ export function DigitalTwinPanel({
             {overflowVol != null && overflowVol > 0 && <p style={{ marginTop: '0.4rem', color: 'var(--danger)', fontSize: '0.85rem' }}>{t.twin_overflow}: {volFromM3Twin(overflowVol, tankVolUnit).toFixed(2)} {tankVolUnit}</p>}
           </div>
         )}
+        {/* Mode: absolute PV / YP targets (cP and lbf/100ft²) */}
         {activeChangeParam === 'yp' && (
           <div style={{ marginBottom: '1rem', display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
             <label style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
@@ -151,6 +192,7 @@ export function DigitalTwinPanel({
             </label>
           </div>
         )}
+        {/* Mode: target flow L/min */}
         {activeChangeParam === 'flow' && (
           <label style={{ display: 'block', marginBottom: '1rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
             {t.twin_target_flow}
@@ -165,6 +207,7 @@ export function DigitalTwinPanel({
             />
           </label>
         )}
+        {/* Mode: jet nozzle size in 1/32 in */}
         {activeChangeParam === 'nozzle' && (
           <label style={{ display: 'block', marginBottom: '1rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
             {t.twin_target_nozzle}
@@ -179,10 +222,12 @@ export function DigitalTwinPanel({
             />
           </label>
         )}
+        {/* One-line pump summary (same total as breakdown below) */}
         <div style={{ marginBottom: '0.75rem', padding: '0.6rem 0.75rem', background: 'var(--bg-dark)', borderRadius: '6px', border: '1px solid var(--panel-border)' }}>
           <span style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>{t.twin_est_pump_blurb}</span>{' '}
           <strong style={{ fontSize: '0.95rem', color: pumpOver ? 'var(--danger)' : 'var(--accent-color)' }}>{toDisplayPressure(pumpPsi)} {units.pressure}</strong>
         </div>
+        {/* Hydraulic breakdown in display pressure units */}
         <div style={{ borderTop: '1px solid var(--panel-border)', paddingTop: '0.8rem' }}>
           <div style={rs}><span>{t.twin_pv_used}</span><span style={vs}>{simPv.toFixed(1)}</span></div>
           <div style={rs}><span>{t.twin_yp_used}</span><span style={vs}>{simYp.toFixed(1)}</span></div>

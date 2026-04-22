@@ -1,3 +1,9 @@
+/**
+ * @fileoverview ESLint flat config for dashboard JS/JSX.
+ * - `react-hooks` recommended: catches invalid hook usage and setState-in-effect patterns.
+ * - `react-refresh` Vite preset: HMR boundary rules for exported components.
+ * - `no-unused-vars` relaxed for ALL_CAPS identifiers (common for intentional placeholders).
+ */
 import js from '@eslint/js'
 import globals from 'globals'
 import reactHooks from 'eslint-plugin-react-hooks'

@@ -14,6 +14,7 @@ import time
 DB_NAME = "sensor_data.db"
 
 def init_db():
+    """Create `sensor_data` if missing; best-effort ALTER for columns added after first deploy."""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute('''
@@ -45,21 +46,24 @@ def init_db():
 
 import json
 
-# Keep in sync with dashboard/src/hydraulics.js
+# --- Shared constant with dashboard/src/hydraulics.js (YP enters annulus/pipe friction proxy). ---
 K_YP_IN_PIPE_TERM = 0.22
 
 
 def _visc_twin(pv, yp):
+    """Empirical viscous term for pipe/annulus segments (must match JS `viscTwin`)."""
     return float(pv) + 5.0 + K_YP_IN_PIPE_TERM * float(yp)
 
 
 def _friction_psi(length_ft, d_eff_in, q_gpm, viscous):
+    """Segment pressure drop (PSI) using simplified power-law vs diameter and flow."""
     if length_ft <= 0 or d_eff_in <= 0 or q_gpm <= 0 or viscous <= 0:
         return 0.0
     return (length_ft * viscous * q_gpm) / (1500.0 * (d_eff_in ** 2.5))
 
 
 def _depth_m_to_native(depth_m, length_unit):
+    """API depth is always meters; config intervals may be in meters or feet."""
     if depth_m is None:
         return 0.0
     d = float(depth_m)
@@ -69,6 +73,7 @@ def _depth_m_to_native(depth_m, length_unit):
 
 
 def _parse_casings(config):
+    """Return list of {start,end,id} casing intervals from JSON string in sim_config."""
     try:
         c = json.loads(config.get("casings") or "[]")
         return c if isinstance(c, list) else []
@@ -77,6 +82,7 @@ def _parse_casings(config):
 
 
 def _hole_id_at_md(md_native, casings, bit_diameter_in):
+    """Open-hole or cased-hole inner diameter (in) at measured depth for annulus gap."""
     cand = []
     for row in casings:
         try:
@@ -94,6 +100,7 @@ def _hole_id_at_md(md_native, casings, bit_diameter_in):
 
 
 def _pipe_geometry_at_md(md_native, depth_native, cfg):
+    """Return (OD, ID) in inches for drill string component present at md_native."""
     dc1_l = float(cfg.get("dc1_length", 0) or 0)
     dc2_l = float(cfg.get("dc2_length", 0) or 0)
     dp_od = float(cfg.get("dp1_od", 0) or 0)
@@ -114,6 +121,7 @@ def _pipe_geometry_at_md(md_native, depth_native, cfg):
 
 
 def _collect_breakpoints(depth_native, casings, bha_len, dc1_l, dc2_l):
+    """Sorted unique MDs where hole ID or pipe OD may change (annulus integration)."""
     b = {0.0, depth_native}
     for row in casings:
         try:
@@ -136,6 +144,7 @@ def _collect_breakpoints(depth_native, casings, bha_len, dc1_l, dc2_l):
 
 
 def _annulus_pressure_psi(config, depth_m, q_gpm, viscous, bit_diameter_in):
+    """Sum annulus friction over MD segments between casing/BHA boundaries (PSI)."""
     length_unit = config.get("length_unit") or "m"
     unit_mult = 3.28084 if length_unit == "m" else 1.0
     depth_native = _depth_m_to_native(depth_m, length_unit)
@@ -164,6 +173,11 @@ def _annulus_pressure_psi(config, depth_m, q_gpm, viscous, bit_diameter_in):
 
 
 class SimState:
+    """
+    Mutable simulator state advanced once per tick in `get_next`.
+    Depth integrates ROP over wall-clock dt; hydraulics use the same BHA model as the dashboard twin.
+    """
+
     def __init__(self):
         # Slowly drifting “surface” and mud properties (random walk or toward API targets).
         self.rop = 15.0

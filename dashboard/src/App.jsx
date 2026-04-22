@@ -1,7 +1,18 @@
 /**
- * Drilling digital-twin dashboard: React UI talks to a local FastAPI server that reads
- * SQLite rows written by mock_data_gen.py. Raw sensor fields are stored in SI-friendly
- * bases (e.g. pressure in PSI, flow in L/min); this file converts for display units.
+ * @fileoverview Drilling digital-twin dashboard — single-page React application.
+ *
+ * Data flow:
+ *   1. `mock_data_gen.py` appends rows to `sensor_data.db`.
+ *   2. `server.py` exposes `/api/latest-data`, `/api/history`, `/api/config`.
+ *   3. This file polls **port 8000** for JSON; never assumes Vite’s dev port for API.
+ *
+ * Major UI regions (see `return` in `App`):
+ *   - Header: locale clock, language toggle, connection badge, total depth shortcut.
+ *   - Settings bar: Wellbore & BHA modal, digital-twin “Change” strip, unit pickers.
+ *   - Sensor grids: `SensorCard`, `PumpCard`, `TankCard`, grouped `RheologyCard`.
+ *   - Modals: time-series chart, `DigitalTwinPanel` (preview-only), BHA JSON editor.
+ *
+ * Raw DB/API bases: pressure PSI, flow L/min, depth m, mud density SG, ROP m/h unless converted.
  */
 import React, { useState, useEffect } from 'react';
 import './index.css';
@@ -11,6 +22,10 @@ import { DigitalTwinPanel } from './DigitalTwinPanel';
 /** 1 PSI ≈ 0.0689476 bar (same factor used in convertValue and pump gauge scaling). */
 const PSI_TO_BAR = 0.0689476;
 
+/**
+ * UI strings for TR / EN. Keys are referenced as `t.key` throughout JSX.
+ * Twin-related keys feed {@link DigitalTwinPanel}; keep both language blocks in sync.
+ */
 const DICTIONARY = {
   TR: {
     app_title: "Sondaj İçin Dijital İkiz Paneli",
@@ -154,7 +169,13 @@ const DICTIONARY = {
   }
 };
 
-/** Map API numeric fields to the unit system selected in the settings bar. */
+/**
+ * Map one API numeric field from canonical DB units to the user-selected display system.
+ * @param {number|undefined|null} val Raw value from SQLite row
+ * @param {'rop'|'flow'|'pressure'|'temp'|'density'|'depth'|'none'} type Which conversion branch to use
+ * @param {object} units Current `units` state object from `App`
+ * @returns {number|undefined|null} Converted number, or passthrough if unknown
+ */
 const convertValue = (val, type, units) => {
   if (val === undefined || val === null) return val;
   let v = Number(val);
@@ -180,6 +201,11 @@ const convertValue = (val, type, units) => {
   }
 };
 
+/**
+ * Build the ordered list of dashboard metrics (id matches DB column names).
+ * @param {object} units Display unit bundle
+ * @param {'TR'|'EN'} lang Active dictionary language
+ */
 const getSensorsConfig = (units, lang) => {
   const t = DICTIONARY[lang];
   const ropUnit = lang === 'TR' ? units.rop.replace('/h', '/sa') : units.rop;
@@ -200,6 +226,10 @@ const getSensorsConfig = (units, lang) => {
   ];
 };
 
+/**
+ * Compact numeric tile with optional delta vs previous poll (trend arrow + diff).
+ * Opens the chart modal when the whole card is clicked.
+ */
 function SensorCard({ sensor, value, previousValue, onClick, t }) {
   const [changed, setChanged] = useState(false);
 
@@ -240,6 +270,10 @@ function SensorCard({ sensor, value, previousValue, onClick, t }) {
   );
 }
 
+/**
+ * Composite card: YP, PV, n, density in one column with per-field trends.
+ * Uses `convertValue` so density/… respect the global unit dropdown.
+ */
 function RheologyCard({ group, latest, previous, onClick, t, units }) {
     const [changed, setChanged] = useState(false);
   
@@ -292,6 +326,11 @@ function RheologyCard({ group, latest, previous, onClick, t, units }) {
     );
 }
 
+/**
+ * Mud pit % with visual tank, pit geometry + volume unit settings, and pit gain/loss heuristics.
+ * Maintains a short ring buffer of level samples to estimate dV/dt, compares to theoretical
+ * rock displacement from ROP × bit area for optional influx / loss alarms (see effects below).
+ */
 function TankCard({ sensor, value, previousValue, bhaConfig, latest, onClick, t, tankDim, setTankDim, tankDimUnit, setTankDimUnit, tankVolUnit, setTankVolUnit }) {
   // --- UI States ---
   const [changed, setChanged] = useState(false); // Triggers visual flash on value change
@@ -634,6 +673,10 @@ function PumpCard({ sensor, value, onClick, t, pressureUnit, maxPressurePsi, set
   );
 }
 
+/**
+ * Root component: owns global polling state, BHA config mirror, chart modal, twin preview, and layout.
+ * Side effects are grouped by concern (latest poll, initial config fetch, history chart, i18n refresh).
+ */
 function App() {
   const [globalLatest, setGlobalLatest] = useState(null);
   const [globalPrev, setGlobalPrev] = useState(null);
@@ -855,7 +898,7 @@ function App() {
         </div>
       </header>
 
-      {/* SETTINGS PLACARD */}
+      {/* Toolbar: BHA modal trigger, twin scenario buttons (preview only), unit pickers */}
       <div className="settings-bar">
          <div className="lang-toggle">
             <button className="lang-btn" style={{ background: 'rgba(56, 189, 248, 0.2)', color: 'var(--accent-color)', padding: '0.4rem 1rem' }} onClick={() => setShowBHAConfig(true)}>
@@ -1100,7 +1143,7 @@ function App() {
         );
       })()}
 
-      {/* DIGITAL TWIN CONTROL MODAL */}
+      {/* What-if hydraulics: no POST; remount per `key` when `activeChangeParam` changes */}
       {activeChangeParam && (
         <DigitalTwinPanel
           key={activeChangeParam}
@@ -1118,7 +1161,7 @@ function App() {
         />
       )}
 
-      {/* BHA & WELLBORE CONFIG MODAL */}
+      {/* Persisted well design: POST /api/config on Save (simulator reads sim_config) */}
       {showBHAConfig && (() => {
         let parsedCasings = [];
         try { parsedCasings = JSON.parse(bhaConfig.casings); } catch { parsedCasings = []; }
