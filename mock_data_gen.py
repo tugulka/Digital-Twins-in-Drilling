@@ -95,9 +95,7 @@ class SimState:
         self.rop += random.uniform(-1.0, 1.0)
         self.rop = max(5.0, min(25.0, self.rop))
 
-        # --- Real-Time Depth Derivation ---
-        # Instead of static strings, Depth continuously increases based on ROP (Rate of Penetration). 
-        # ROP is in active length unit / hour.
+        # ROP is strictly maintained in meters/hour internally.
         now = time.time()
         dt = now - self.last_time
         self.last_time = now
@@ -110,6 +108,8 @@ class SimState:
                     cases = json.loads(config['casings'])
                     if cases:
                         casing_depth = max([float(c.get('end', 0)) for c in cases])
+                        if config.get("length_unit") == "ft":
+                            casing_depth /= 3.28084
             except Exception: pass
             self.current_depth = casing_depth if casing_depth > 0 else 0
 
@@ -144,8 +144,8 @@ class SimState:
         
         # If Bottom Hole Assembly (BHA) data exists, compute physical pressure drops.
         if config:
-            n_size = float(config.get("bit_nozzle_size", 12))
-            n_qty = int(config.get("bit_nozzle_qty", 3))
+            n_size = float(config.get("bit_nozzle_size") or 12)
+            n_qty = int(config.get("bit_nozzle_qty") or 3)
             nozzles = [n_size] * n_qty
             # Total Flow Area (TFA) for the Drill Bit Nozzles. Uses standard industry geometry.
             tfa = sum([3.14159 * ((n/32.0)**2) / 4 for n in nozzles]) if nozzles else 0.5
@@ -169,18 +169,19 @@ class SimState:
                     return (length_ft * (self.pv + 5) * q_gpm) / (1500 * (inner_d**2.5))
                 return 0
             
-            dc1_l = float(config.get("dc1_length", 200))
-            dc2_l = float(config.get("dc2_length", 0))
+            dc1_l = float(config.get("dc1_length") or 200)
+            dc2_l = float(config.get("dc2_length") or 0)
             
-            # Drill Pipe (DP1) Length is entirely governed by dynamic depth (auto-length mapping)
-            # This ensures that as we drill deeper, pipe extends, and frictional pressure linearly increases!
+            # Drill Pipe (DP1) Length is governed by dynamic depth.
+            # Convert current_depth (meters) to the active length unit before subtraction.
             bha_length = dc1_l + dc2_l
-            dyn_dp1_l = max(0.0, self.current_depth - bha_length)
+            current_depth_in_unit = self.current_depth * (1.0 if config.get("length_unit") == "m" else 3.28084)
+            dyn_dp1_l = max(0.0, current_depth_in_unit - bha_length)
 
             pipe_pd = 0.0
-            pipe_pd += calc_pd(dyn_dp1_l, config.get("dp1_id", 3.826))
-            pipe_pd += calc_pd(dc1_l, config.get("dc1_id", 2.50))
-            pipe_pd += calc_pd(dc2_l, config.get("dc2_id", 0))
+            pipe_pd += calc_pd(dyn_dp1_l, float(config.get("dp1_id") or 3.826))
+            pipe_pd += calc_pd(dc1_l, float(config.get("dc1_id") or 2.50))
+            pipe_pd += calc_pd(dc2_l, float(config.get("dc2_id") or 0))
 
             pump_press = bit_pd + pipe_pd + random.uniform(-5, 5)
 
