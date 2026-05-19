@@ -42,6 +42,16 @@ const DICTIONARY = {
     pump_name: "Pompa Basıncı",
     standpipe_name: "Standpipe Basıncı",
     temp_name: "Çamur Sıcaklığı",
+    prop_name: "Çamur Bilgileri",
+    tau0_name: "Akma Gerilmesi (τ0)",
+    k_name: "Kıvam İndeksi (K)",
+    t600_name: "θ_600",
+    t300_name: "θ_300",
+    t200_name: "θ_200",
+    t100_name: "θ_100",
+    t6_name: "θ_6",
+    t3_name: "θ_3",
+    viscometer_name: "Viskometre Okumaları",
     yp_name: "Akma Gerilmesi",
     pv_name: "Kıvam İndeksi",
     n_name: "Akış Davranış İndeksi",
@@ -75,24 +85,27 @@ const DICTIONARY = {
     twin_nozzle_title: "Nozzle (önizleme)",
     twin_flow_title: "Akış (önizleme)",
     twin_agent: "Katı madde",
-    twin_calcite: "Kalsit (2.7 SG)",
-    twin_barite: "Barit (4.2 SG)",
+    twin_calcite: "Kalsit",
+    twin_barite: "Barit",
     twin_target_density: "Hedef yoğunluk",
-    twin_kg_per_ton: "1 ton çamur için katı",
-    twin_overflow: "Tank taşması",
+    twin_kg_per_ton: "1 ton çamur için eklenecek miktar",
+    twin_total_system_chem: "Tüm Sistem İçin Gerekli Kimyasal (Kuyu + Tank)",
+    twin_overflow: "Tank taşma hacmi",
     twin_pump_warn: "Maks. pompa basıncı aşıldı",
     twin_bit: "Bit ΔP",
     twin_inner: "İç boru",
     twin_annulus: "Annülüs",
     twin_total: "Tahmini pompa",
-    twin_pv_used: "PV (hesap)",
-    twin_yp_used: "YP (hesap)",
-    twin_target_pv: "Hedef PV (cP)",
-    twin_target_yp: "Hedef YP (lbf/100ft²)",
+    
+    twin_k_used: "K (hesap)",
+twin_n_used: "n (hesap)",
+    twin_target_k: "Hedef K (Pa.s^n)",
+twin_target_n: "Hedef n",
+    
     twin_target_flow: "Hedef akış (L/min)",
     twin_target_nozzle: "Hedef nozzle (1/32 in)",
     twin_close: "Kapat",
-    twin_visc_twin: "viscTwin (boru+annülüs)",
+    twin_surface: "Yüzey Kaybı (Surface)",
     twin_unit_kg: "kg",
     twin_standpipe: "Standpipe (tahmini)",
     twin_est_pump_blurb: "Bu değerlerle tahmini pompa basıncı:"
@@ -112,6 +125,16 @@ const DICTIONARY = {
     pump_name: "Pump Pressure",
     standpipe_name: "Standpipe Pressure",
     temp_name: "Mud Temperature",
+    prop_name: "Mud Properties",
+    tau0_name: "Yield Stress (τ0)",
+    k_name: "Consistency Index (K)",
+    t600_name: "θ_600",
+    t300_name: "θ_300",
+    t200_name: "θ_200",
+    t100_name: "θ_100",
+    t6_name: "θ_6",
+    t3_name: "θ_3",
+    viscometer_name: "Viscometer Readings",
     yp_name: "Yield Point",
     pv_name: "Plastic Viscosity",
     n_name: "Flow Behavior Index",
@@ -145,26 +168,32 @@ const DICTIONARY = {
     twin_nozzle_title: "Nozzle (preview)",
     twin_flow_title: "Flow (preview)",
     twin_agent: "Weighting agent",
-    twin_calcite: "Calcite (2.7 SG)",
-    twin_barite: "Barite (4.2 SG)",
+    twin_calcite: "Calcite",
+    twin_barite: "Barite",
     twin_target_density: "Target density",
     twin_kg_per_ton: "Solids for 1 metric ton of mud",
+    twin_total_system_chem: "Total System Chemical Req. (Wellbore + Tank)",
     twin_overflow: "Tank overflow",
     twin_pump_warn: "Max pump pressure exceeded",
     twin_bit: "Bit ΔP",
     twin_inner: "Inner pipe",
     twin_annulus: "Annulus",
-    twin_total: "Estimated pump",
-    twin_pv_used: "PV (calc)",
-    twin_yp_used: "YP (calc)",
-    twin_target_pv: "Target PV (cP)",
-    twin_target_yp: "Target YP (lbf/100ft²)",
+    twin_total: "Pompa Basıncı",
+    
+    twin_k_used: "K (calc)",
+twin_n_used: "n (calc)",
+    twin_target_k: "Target K (Pa.s^n)",
+twin_target_n: "Target n",
+    
     twin_target_flow: "Target flow (L/min)",
     twin_target_nozzle: "Target nozzle (1/32 in)",
     twin_close: "Close",
-    twin_visc_twin: "viscTwin (pipe+annulus)",
+    twin_surface: "Yüzey Basınç Kaybı",
+    twin_drill_string: "Sondaj Dizisi",
+    twin_annulus_open: "Anülüs (Açık Kuyu)",
+    twin_annulus_cased: "Anülüs (Casing)",
     twin_unit_kg: "kg",
-    twin_standpipe: "Standpipe (est.)",
+    twin_standpipe: "Standpipe Basıncı",
     twin_est_pump_blurb: "Estimated pump pressure for these values:"
   }
 };
@@ -219,6 +248,14 @@ const getSensorsConfig = (units, lang) => {
     { id: 'Standpipe_Press_psi', type: 'pressure', name: t.standpipe_name, unit: units.pressure, icon: '🏗️' },
     { id: 'Mud_Temp_C', type: 'temp', name: t.temp_name, unit: units.temp, icon: '🌡️' },
     { id: 'Yield_Point', type: 'none', name: t.yp_name, unit: 'lbf/100ft²', icon: '💧' },
+    { id: 'tau0_si', type: 'none', name: t.tau0_name, unit: 'Pa', icon: '💧' },
+    { id: 'K_si', type: 'none', name: t.k_name, unit: 'Pa.s^n', icon: '🧪' },
+    { id: 'theta_600', type: 'none', name: t.t600_name, unit: 'lb/100ft²', icon: '🔄' },
+    { id: 'theta_300', type: 'none', name: t.t300_name, unit: 'lb/100ft²', icon: '🔄' },
+    { id: 'theta_200', type: 'none', name: t.t200_name, unit: 'lb/100ft²', icon: '🔄' },
+    { id: 'theta_100', type: 'none', name: t.t100_name, unit: 'lb/100ft²', icon: '🔄' },
+    { id: 'theta_6', type: 'none', name: t.t6_name, unit: 'lb/100ft²', icon: '🔄' },
+    { id: 'theta_3', type: 'none', name: t.t3_name, unit: 'lb/100ft²', icon: '🔄' },
     { id: 'Plastic_Viscosity', type: 'none', name: t.pv_name, unit: 'cP', icon: '🧪' },
     { id: 'Flow_Behavior_Index', type: 'none', name: t.n_name, unit: 'n', icon: '📊' },
     { id: 'Mud_Density_SG', type: 'density', name: t.density_name, unit: units.density, icon: '⚖️' },
@@ -296,8 +333,8 @@ function RheologyCard({ group, latest, previous, onClick, t, units }) {
     return (
       <div className={`sensor-card ${changed ? 'value-changed' : ''}`} onClick={onClick} style={{ cursor: 'pointer' }}>
         <div className="card-header" style={{ marginBottom: '1.25rem' }}>
-          <span className="card-title">{t.app_title.includes('Dijital') ? 'Çamur Reolojisi' : 'Mud Rheology'}</span>
-          <span className="card-icon">🧪</span>
+          <span className="card-title">{group.titleKey ? t[group.titleKey] : (t.app_title.includes('Dijital') ? 'Çamur Reolojisi' : 'Mud Rheology')}</span>
+          <span className="card-icon">{group.icon || "🧪"}</span>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
            {group.sensors.map(s => {
@@ -701,7 +738,7 @@ function App() {
       dp2_id: 0, dp2_od: 0, dp2_length: 0,
       dc1_id: 2.50, dc1_od: 4.75, dc1_length: 200,
       dc2_id: 0, dc2_od: 0, dc2_length: 0,
-      target_density: null, target_yp: null, target_flow_rate: null
+      target_density: null, target_k: null, target_n: null, target_flow_rate: null
   });
 
   // Digital Twin Control State
@@ -763,14 +800,31 @@ function App() {
     SENSORS.find(s => s.id === 'Mud_Temp_C')
   ];
 
+  const propertiesGroup = {
+    isGroup: true,
+    titleKey: 'prop_name',
+    icon: '🌡️',
+    sensors: [
+       SENSORS.find(s => s.id === 'Mud_Temp_C'),
+       SENSORS.find(s => s.id === 'Mud_Density_SG'),
+       SENSORS.find(s => s.id === 'tau0_si'),
+       SENSORS.find(s => s.id === 'K_si'),
+       SENSORS.find(s => s.id === 'Flow_Behavior_Index')
+    ].filter(Boolean)
+  };
+
   const rheologyGroup = {
     isGroup: true,
+    titleKey: 'viscometer_name',
+    icon: '🧪',
     sensors: [
-       SENSORS.find(s => s.id === 'Yield_Point'),
-       SENSORS.find(s => s.id === 'Plastic_Viscosity'),
-       SENSORS.find(s => s.id === 'Flow_Behavior_Index'),
-       SENSORS.find(s => s.id === 'Mud_Density_SG')
-    ]
+       SENSORS.find(s => s.id === 'theta_600'),
+       SENSORS.find(s => s.id === 'theta_300'),
+       SENSORS.find(s => s.id === 'theta_200'),
+       SENSORS.find(s => s.id === 'theta_100'),
+       SENSORS.find(s => s.id === 'theta_6'),
+       SENSORS.find(s => s.id === 'theta_3')
+    ].filter(Boolean)
   };
 
   /** Poll latest row for cards and connection status. */
@@ -779,9 +833,26 @@ function App() {
       try {
         const response = await fetch('http://localhost:8000/api/latest-data');
         if (!response.ok) throw new Error('Network Issue');
+        
+        const addRheo = (item) => {
+             if(!item) return item;
+             const t600 = item.theta_600 || 60;
+             const t300 = item.theta_300 || 40;
+             const t3 = item.theta_3 || 5;
+             let n = 0.5;
+             const num = Math.max(0.1, t600 - t3);
+             const den = Math.max(0.1, t300 - t3);
+             if (den > 0) n = 3.321928 * Math.log10(num / den);
+             n = Math.max(0.1, Math.min(0.99, n));
+             item.tau0_si = t3 * 0.4788;
+             item.K_si = ((t300 - t3) / Math.pow(511, n)) * 0.4788 * Math.pow(1.703, n);
+             return item;
+        };
+
         const json = await response.json();
         
         if (!json.error) {
+           addRheo(json);
            setGlobalLatest(prev => {
              if (prev && prev.id !== json.id) setGlobalPrev(prev);
              return json;
@@ -819,10 +890,27 @@ function App() {
         if (timeRange === '24h') url = 'http://localhost:8000/api/history?hours=24';
 
         const response = await fetch(url);
+        
+        const addRheo = (item) => {
+             if(!item) return item;
+             const t600 = item.theta_600 || 60;
+             const t300 = item.theta_300 || 40;
+             const t3 = item.theta_3 || 5;
+             let n = 0.5;
+             const num = Math.max(0.1, t600 - t3);
+             const den = Math.max(0.1, t300 - t3);
+             if (den > 0) n = 3.321928 * Math.log10(num / den);
+             n = Math.max(0.1, Math.min(0.99, n));
+             item.tau0_si = t3 * 0.4788;
+             item.K_si = ((t300 - t3) / Math.pow(511, n)) * 0.4788 * Math.pow(1.703, n);
+             return item;
+        };
+
         const jsonList = await response.json();
         
         if (jsonList && jsonList.length > 0) {
           const processedList = jsonList.map(item => {
+             addRheo(item);
              const timeStr = item.Timestamp ? item.Timestamp.split(' ')[1] : '';
              const displayTime = ['1h', '24h', '30m'].includes(timeRange) ? timeStr.substring(0, 5) : timeStr;
              
@@ -912,7 +1000,7 @@ function App() {
              </div>
              <div style={{ display: 'flex', background: 'rgba(0,0,0,0.3)', border: '1px solid var(--panel-border)', borderRadius: '6px', overflow: 'hidden' }}>
                  <button className="change-btn" onClick={() => { setActiveChangeParam('density'); }}>{lang === 'TR' ? 'Yoğunluk' : 'Density'}</button>
-                 <button className="change-btn" onClick={() => { setActiveChangeParam('yp'); }}>{lang === 'TR' ? 'YP' : 'YP'}</button>
+                 <button className="change-btn" onClick={() => { setActiveChangeParam('rheology'); }}>{lang === 'TR' ? 'Reoloji' : 'Rheology'}</button>
                  <button className="change-btn" onClick={() => { setActiveChangeParam('nozzle'); }}>{lang === 'TR' ? 'Nozzle' : 'Nozzle'}</button>
                  <button className="change-btn" onClick={() => { setActiveChangeParam('flow'); }}>{lang === 'TR' ? 'Akış' : 'Flow'}</button>
              </div>
@@ -1048,14 +1136,14 @@ function App() {
                 onClick={() => { setSelectedSensor(bottomSensors[0]); setTimeRange('live'); }}
              />
          )}
-         {bottomSensors[1] && (
-            <SensorCard 
-              sensor={bottomSensors[1]} t={t}
-              value={globalLatest ? parseFloat(convertValue(globalLatest[bottomSensors[1].id], bottomSensors[1].type, units).toFixed(2)) : undefined} 
-              previousValue={globalPrev ? parseFloat(convertValue(globalPrev[bottomSensors[1].id], bottomSensors[1].type, units).toFixed(2)) : undefined}
-              onClick={() => { setSelectedSensor(bottomSensors[1]); setTimeRange('live'); }}
-            />
-         )}
+         <RheologyCard 
+             group={propertiesGroup} 
+             t={t}
+             units={units}
+             latest={globalLatest}
+             previous={globalPrev}
+             onClick={() => { setSelectedSensor(propertiesGroup); setActiveRheologyTab(0); setTimeRange('live'); }}
+         />
          <RheologyCard 
              group={rheologyGroup} 
              t={t}

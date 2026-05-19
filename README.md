@@ -8,10 +8,10 @@ Küçük bir **sondaj dijital ikiz demosu**: Python tabanlı bir simülatör zam
 
 | Bileşen | Rol |
 |--------|------|
-| `mock_data_gen.py` | Korelasyonlu random walk + hedefe yakınsama; `sim_config` ile BHA/kuyu; **bit + iç boru + annülüs** basınç düşümü (`_visc_twin`, `_annulus_pressure_psi`); yaklaşık her 2 saniyede `sensor_data` satırı. |
+| `mock_data_gen.py` | Korelasyonlu random walk + hedefe yakınsama; `sim_config` ile BHA/kuyu; **Herschel-Bulkley (API RP 13D)** hidrolik motoru (Boru + Açık Kuyu/Casing Anülüs ayrımlı basınç düşümü); yaklaşık her 2 saniyede bir sensör loglaması, ancak reoloji/çamur özelliklerinde **15 dakikalık sahadaki laboratuvar gerçekliğine uygun gecikmeli güncellemeler**. |
 | `server.py` | FastAPI: son satır, geçmiş (zaman penceresi + downsampling), `GET/POST /api/config` ile BHA/kuyu JSON’u SQLite `sim_config` tablosunda. **Port 8000.** |
 | `dashboard/` | Vite + React + Recharts; `http://localhost:8000` API’ye poll eder. |
-| `dashboard/src/hydraulics.js` | Önizleme hidroliği: `viscTwin`, `computeHydraulicsPsi` — **Python simülatörü ile aynı sabitler/formüller** (özellikle `K_YP_IN_PIPE_TERM`). |
+| `dashboard/src/hydraulics.js` | Önizleme hidroliği: **Herschel-Bulkley (API RP 13D)** formülleri, kuyu sistemi toplam hacim hesaplamaları. Python motoruyla %100 matematiksel paralellik gösterir. |
 | `dashboard/src/DigitalTwinPanel.jsx` | “Değiştir” menüsünden açılan **salt önizleme** modalları (yoğunluk, YP/PV, akış, nozzle); sunucuya yazmaz; tank taşması / kg-ton katı / pompa limiti uyarısı. |
 | `dashboard/src/App.jsx` | Ana UI, birim dönüşümleri, tank alarm mantığı, BHA modalı, dijital ikiz state’i. |
 | `extract_pdf.py` | Tek seferlik: projedeki PDF’ten düz metin çıkarıp `pdf_text.txt` üretir. |
@@ -61,7 +61,10 @@ Vite genelde **http://localhost:5173** üzerinde açar; tarayıcıda bu adresi k
 
 ## Önemli özellikler (güncel)
 
-- **Dijital ikiz önizleme:** Yoğunluk (ajan + hedef birim), reoloji, akış ve nozzle için hedef değer girişi; tahmini pompa / bit / iç boru / annülüs / standpipe basınçları; maksimum pompa basıncı aşım uyarısı.
+- **Dijital ikiz önizleme ("Değiştir" Sekmeleri):** Yoğunluk, Reoloji, Akış ve Nozzle ayarlarını değiştirebilirsiniz. Değişiklikler sunucuya yazılmaz, tarayıcıda izole bir API RP 13D simülasyonu çalıştırılır.
+  - *Kimyasal Tahmini:* Yoğunluk artırımında (Kalsit/Barit) **tüm kuyu hacmini** (tanklar + yeraltı annülüs/boru boşlukları) göz önünde bulunduran toplam tonaj hesaplaması.
+  - *Fann 35 Reoloji:* K ve n girmek yerine doğrudan vizkozimetrenin okuduğu $\theta_{600}$, $\theta_{300}$, $\dots$, $\theta_{3}$ değerleri girilir. Sistem K ve n'yi hesaplayıp tüm basınç kırılımlarını anında çizer.
+  - *Detaylı Basınç Kırılımı:* Yüzey (Surface Line), İç Boru (DP, BHA), Matkap (Bit), Anülüs (Casing içi) ve Anülüs (Açık Kuyu) ayrıntılı hidrolik kırılımları formun hemen altında sunulur.
 - **Wellbore & BHA:** Muhafaza profili, drill pipe (otomatik uzunluk), drill collar, bit/nozzle; kaydetme `POST /api/config` ile simülatöre gider.
 - **Tank kartı:** Boyutlar ve hacim birimi; kazı hacmi ile tank hızı korelasyonuna dayalı influx/loss alarm eşikleri.
 - **Birimler:** ROP, akış, basınç, sıcaklık, yoğunluk, derinlik için ayar çubuğundan seçim.
@@ -80,7 +83,7 @@ Vite genelde **http://localhost:5173** üzerinde açar; tarayıcıda bu adresi k
 
 ## Hidrolik hizalama
 
-`dashboard/src/hydraulics.js` ile `mock_data_gen.py` içindeki **viscTwin / sürtünme / annülüs segmentasyonu** bilinçli olarak paralel tutulur. Bir tarafta formül değişince diğeri de gözden geçirilmelidir.
+`dashboard/src/hydraulics.js` ile `mock_data_gen.py` içindeki **Herschel-Bulkley, Dodge-Metzner, Reynolds türbülans geçişleri ve sistem hacmi algoritmaları** bilinçli olarak paralel tutulur. Python motoru zaman içinde gelişirken, JS motoru anlık kullanıcı ("what-if") senaryoları için hizmet verir. Bir tarafta formül (özellikle `calculate_re_c` ve akış davranışı limitleri) değişince diğeri de eşzamanlı gözden geçirilmelidir.
 
 ## Lisans
 

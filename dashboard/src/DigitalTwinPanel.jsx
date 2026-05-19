@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @fileoverview Digital twin **preview** modals (density, rheology, flow, nozzle).
  * Opens from the “Değiştir / Change” strip in `App.jsx`. Does **not** POST targets to the API;
  * all pressures are what-if values computed with {@link computeHydraulicsPsi} using edited inputs
@@ -7,7 +7,7 @@
  */
 
 import React, { useState } from 'react';
-import { computeHydraulicsPsi, viscTwin } from './hydraulics';
+import { computeHydraulicsPsi, computeSystemVolumeM3 } from './hydraulics';
 
 /** Specific gravity of calcite weighting agent (for kg/ton mud recipe estimate). */
 const CALCITE_SG = 2.7;
@@ -73,18 +73,52 @@ export function DigitalTwinPanel({
   tankDim, tankDimUnit, tankVolUnit, maxPumpPressurePsi, toDisplayPressure,
 }) {
   const [agent, setAgent] = useState('barite');
-  const [targetDensityStr, setTargetDensityStr] = useState('');
+  
+  // --- Form States: Initialized lazily with LIVE telemetry data so user can use up/down spinners directly ---
+  const [targetDensityStr, setTargetDensityStr] = useState(() => globalLatest?.Mud_Density_SG != null ? String(Number(globalLatest.Mud_Density_SG).toFixed(2)) : '1.2');
   const [densityUnit, setDensityUnit] = useState(() => units.density);
-  const [targetPvStr, setTargetPvStr] = useState('');
-  const [targetYpStr, setTargetYpStr] = useState('');
-  const [targetFlowStr, setTargetFlowStr] = useState('');
-  const [targetNozzleStr, setTargetNozzleStr] = useState('');
+  const [t600Str, setT600Str] = useState(() => String(Number(globalLatest?.theta_600 || 60).toFixed(1)));
+  const [t300Str, setT300Str] = useState(() => String(Number(globalLatest?.theta_300 || 40).toFixed(1)));
+  const [t200Str, setT200Str] = useState(() => String(Number(globalLatest?.theta_200 || 30).toFixed(1)));
+  const [t100Str, setT100Str] = useState(() => String(Number(globalLatest?.theta_100 || 20).toFixed(1)));
+  const [t6Str, setT6Str] = useState(() => String(Number(globalLatest?.theta_6 || 6).toFixed(1)));
+  const [t3Str, setT3Str] = useState(() => String(Number(globalLatest?.theta_3 || 5).toFixed(1)));
+  const [targetFlowStr, setTargetFlowStr] = useState(() => String(Number(globalLatest?.Flow_Rate_lpm || 2000).toFixed(0)));
+  const [targetNozzleStr, setTargetNozzleStr] = useState(() => String(Number(bhaConfig?.bit_nozzle_size || 12).toFixed(0)));
 
   // --- Live telemetry used as defaults when preview fields are left empty ---
   const depthM = globalLatest?.Current_Depth_m != null ? Number(globalLatest.Current_Depth_m) : 0;
   const baseFlow = globalLatest?.Flow_Rate_lpm != null ? Number(globalLatest.Flow_Rate_lpm) : 0;
-  const basePv = globalLatest?.Plastic_Viscosity != null ? Number(globalLatest.Plastic_Viscosity) : 0;
-  const baseYp = globalLatest?.Yield_Point != null ? Number(globalLatest.Yield_Point) : 0;
+  const baseT600 = globalLatest?.theta_600 || 60;
+  const baseT300 = globalLatest?.theta_300 || 40;
+  const baseT200 = globalLatest?.theta_200 || 30;
+  const baseT100 = globalLatest?.theta_100 || 20;
+  const baseT6 = globalLatest?.theta_6 || 6;
+  const baseT3 = globalLatest?.theta_3 || 5;
+
+  const p_t600 = activeChangeParam === 'rheology' ? parseOptionalNumber(t600Str) : null;
+  const p_t300 = activeChangeParam === 'rheology' ? parseOptionalNumber(t300Str) : null;
+  const p_t200 = activeChangeParam === 'rheology' ? parseOptionalNumber(t200Str) : null;
+  const p_t100 = activeChangeParam === 'rheology' ? parseOptionalNumber(t100Str) : null;
+  const p_t6 = activeChangeParam === 'rheology' ? parseOptionalNumber(t6Str) : null;
+  const p_t3 = activeChangeParam === 'rheology' ? parseOptionalNumber(t3Str) : null;
+
+  const simT600 = p_t600 != null ? p_t600 : baseT600;
+  const simT300 = p_t300 != null ? p_t300 : baseT300;
+  const simT200 = p_t200 != null ? p_t200 : baseT200;
+  const simT100 = p_t100 != null ? p_t100 : baseT100;
+  const simT6 = p_t6 != null ? p_t6 : baseT6;
+  const simT3 = p_t3 != null ? p_t3 : baseT3;
+
+  let simN = 0.5;
+  const num = Math.max(0.1, simT600 - simT3);
+  const den = Math.max(0.1, simT300 - simT3);
+  if (den > 0) simN = 3.321928 * Math.log10(num / den);
+  simN = Math.max(0.01, Math.min(1.0, simN));
+
+  const tau_0_si = simT3 * 0.4788;
+  const simK = ((simT300 - simT3) / Math.pow(511, simN)) * 0.4788 * Math.pow(1.703, simN);
+
   const baseRho = globalLatest?.Mud_Density_SG != null ? Number(globalLatest.Mud_Density_SG) : 1.2;
   const mudPct = globalLatest?.Mud_Level_pct != null ? Number(globalLatest.Mud_Level_pct) : 0;
 
@@ -92,10 +126,6 @@ export function DigitalTwinPanel({
   const targetFlow = activeChangeParam === 'flow' ? parseOptionalNumber(targetFlowStr) : null;
   // Floor at 100 L/min matches legacy simulator stability (same as previous delta-based UI).
   const simFlow = Math.max(100, targetFlow != null ? targetFlow : baseFlow);
-  const targetPv = activeChangeParam === 'yp' ? parseOptionalNumber(targetPvStr) : null;
-  const targetYp = activeChangeParam === 'yp' ? parseOptionalNumber(targetYpStr) : null;
-  const simPv = Math.max(1, targetPv != null ? targetPv : basePv);
-  const simYp = Math.max(0, targetYp != null ? targetYp : baseYp);
   const targetNozzle = activeChangeParam === 'nozzle' ? parseOptionalNumber(targetNozzleStr) : null;
   const simNozzleSize = Math.max(1, targetNozzle != null ? targetNozzle : baseNozzle);
   const simNozzleQty = Number(bhaConfig?.bit_nozzle_qty ?? 3);
@@ -103,34 +133,51 @@ export function DigitalTwinPanel({
   const simDensity = targetSg != null && Number.isFinite(targetSg) ? targetSg : baseRho;
 
   const hyd = computeHydraulicsPsi({
-    densitySg: simDensity, flowLpm: simFlow, pv: simPv, yp: simYp, depthM, config: bhaConfig,
+    densitySg: simDensity, flowLpm: simFlow, k_si: simK, n: simN, tau0_si: tau_0_si, depthM, config: bhaConfig,
     nozzleSizeThirtySeconds: simNozzleSize, nozzleQty: simNozzleQty,
   });
   const pumpPsi = hyd.pumpPsi;
   const pumpOver = pumpPsi > maxPumpPressurePsi;
 
-  // --- Density mode: solids loading (kg per metric ton of mud) + pit freeboard overflow (m³) ---
+  // --- Chemical Mass & Overflow Calculations (Density Scenario) ---
   const sgSolid = agent === 'calcite' ? CALCITE_SG : BARITE_SG;
-  let kgPerTon = null;
-  let overflowVol = null;
+  let totalSolidKg = null; // Total required mass for system
+  let overflowVol = null;  // Overflow volume in pits
+  
   if (activeChangeParam === 'density' && targetSg != null && Number.isFinite(targetSg)) {
-    const rho1 = baseRho * 1000;
-    const rho2 = targetSg * 1000;
-    const rhoS = sgSolid * 1000;
+    const rho1 = baseRho * 1000;  // Initial density (kg/m^3)
+    const rho2 = targetSg * 1000; // Target density (kg/m^3)
+    const rhoS = sgSolid * 1000;  // Solid agent density (kg/m^3)
+    
     if (rho2 > rho1 && rho2 < rhoS) {
-      kgPerTon = (1000 * (rho2 - rho1)) / (rhoS - rho2);
-      const dV = kgPerTon / rhoS;
-      const totalM3 = toMetersTank(tankDim.length, tankDimUnit) * toMetersTank(tankDim.width, tankDimUnit) * toMetersTank(tankDim.height, tankDimUnit);
-      const curM3 = totalM3 * (mudPct / 100);
-      const cap = totalM3 - curM3;
-      overflowVol = Math.max(0, dV - cap);
+      // 1. Calculate Active Tank Volume (Surface)
+      const totalTankM3 = toMetersTank(tankDim.length, tankDimUnit) * toMetersTank(tankDim.width, tankDimUnit) * toMetersTank(tankDim.height, tankDimUnit);
+      const curTankM3 = totalTankM3 * (mudPct / 100);
+      
+      // 2. Calculate Subsurface Wellbore Volume
+      const wellboreM3 = computeSystemVolumeM3(depthM, bhaConfig);
+      
+      // 3. Total System Volume
+      const totalSystemM3 = curTankM3 + wellboreM3;
+      
+      // 4. Required Mass of Solid (Formula derived from Volume Balance: V_1 + M_s/rho_s = V_2)
+      totalSolidKg = totalSystemM3 * (rho2 - rho1) * rhoS / (rhoS - rho2);
+      
+      // 5. Overflow estimation: How much fluid displacement will push over pit capacity
+      const dV_total = totalSolidKg / rhoS; // Volume added by solids
+      const cap = totalTankM3 - curTankM3;  // Freeboard space in tanks
+      overflowVol = Math.max(0, dV_total - cap);
     }
   }
 
-  const vt = viscTwin(simPv, simYp);
-  const title = activeChangeParam === 'density' ? t.twin_density_title : activeChangeParam === 'yp' ? t.twin_rheo_title : activeChangeParam === 'nozzle' ? t.twin_nozzle_title : t.twin_flow_title;
+  
+  const title = activeChangeParam === 'density' ? t.twin_density_title : activeChangeParam === 'rheology' ? t.twin_rheo_title : activeChangeParam === 'nozzle' ? t.twin_nozzle_title : t.twin_flow_title;
   const rs = { display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: '0.35rem', color: 'var(--text-secondary)' };
   const vs = { color: 'var(--text-primary)', fontWeight: 'bold' };
+
+  const chemName = agent === 'calcite' ? t.twin_calcite : t.twin_barite;
+  const rawChemLabel = t.twin_total_system_chem || 'Total System Chemical Req.';
+  const chemLabel = rawChemLabel.replace('Kimyasal', chemName).replace('Chemical', chemName);
 
   return (
     <div className="modal-overlay" onClick={(e) => { if (e.target.classList.contains('modal-overlay')) onClose(); }}>
@@ -152,44 +199,42 @@ export function DigitalTwinPanel({
                 <option value="SG">SG</option><option value="lb/gal">lb/gal</option><option value="lb/ft³">lb/ft³</option>
               </select>
             </div>
-            {kgPerTon != null && Number.isFinite(kgPerTon) && (
-              <p style={{ marginTop: '0.6rem', fontSize: '0.85rem' }}>
-                {t.twin_kg_per_ton}:{' '}
-                <span style={vs}>
-                  {kgPerTon.toFixed(1)} {t.twin_unit_kg}
-                </span>
-              </p>
+            {totalSolidKg != null && Number.isFinite(totalSolidKg) && (
+              <div style={{ marginTop: '0.6rem', fontSize: '0.85rem' }}>
+                <p style={{ color: 'var(--accent-color)', fontWeight: 'bold', fontSize: '0.95rem' }}>
+                  {chemLabel}:{' '}
+                  <span>{(totalSolidKg / 1000).toFixed(1)} Ton</span>
+                </p>
+                {agent === 'calcite' && targetSg > 1.25 && (
+                   <p style={{ marginTop: '0.5rem', color: 'var(--warning)', fontWeight: 'bold' }}>⚠️ İstediğiniz yoğunluğa ulaşamayabilirsiniz.</p>
+                )}
+                {agent === 'barite' && targetSg > 1.50 && (
+                   <p style={{ marginTop: '0.5rem', color: 'var(--warning)', fontWeight: 'bold' }}>⚠️ İstediğiniz yoğunluğa ulaşamayabilirsiniz.</p>
+                )}
+              </div>
             )}
             {overflowVol != null && overflowVol > 0 && <p style={{ marginTop: '0.4rem', color: 'var(--danger)', fontSize: '0.85rem' }}>{t.twin_overflow}: {volFromM3Twin(overflowVol, tankVolUnit).toFixed(2)} {tankVolUnit}</p>}
           </div>
         )}
-        {/* Mode: absolute PV / YP targets (cP and lbf/100ft²) */}
-        {activeChangeParam === 'yp' && (
-          <div style={{ marginBottom: '1rem', display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
-            <label style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-              {t.twin_target_pv}
-              <input
-                type="number"
-                step="0.1"
-                min="0"
-                value={targetPvStr}
-                onChange={(e) => setTargetPvStr(e.target.value)}
-                placeholder={`${basePv.toFixed(1)}`}
-                style={{ display: 'block', width: '100%', marginTop: '0.35rem', padding: '0.5rem', background: 'var(--bg-dark)', border: '1px solid var(--panel-border)', color: '#fff', borderRadius: '4px', boxSizing: 'border-box' }}
-              />
-            </label>
-            <label style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-              {t.twin_target_yp}
-              <input
-                type="number"
-                step="0.1"
-                min="0"
-                value={targetYpStr}
-                onChange={(e) => setTargetYpStr(e.target.value)}
-                placeholder={`${baseYp.toFixed(1)}`}
-                style={{ display: 'block', width: '100%', marginTop: '0.35rem', padding: '0.5rem', background: 'var(--bg-dark)', border: '1px solid var(--panel-border)', color: '#fff', borderRadius: '4px', boxSizing: 'border-box' }}
-              />
-            </label>
+        {/* Mode: viscometer targets */}
+        {activeChangeParam === 'rheology' && (
+          <div style={{ marginBottom: '1rem', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.65rem' }}>
+            {[['θ_600', t600Str, setT600Str, baseT600], ['θ_300', t300Str, setT300Str, baseT300], 
+              ['θ_200', t200Str, setT200Str, baseT200], ['θ_100', t100Str, setT100Str, baseT100], 
+              ['θ_6', t6Str, setT6Str, baseT6], ['θ_3', t3Str, setT3Str, baseT3]].map(([label, val, setVal, baseVal]) => (
+              <label key={label} style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                {label}
+                <input
+                  type="number"
+                  step="0.5"
+                  min="0"
+                  value={val}
+                  onChange={(e) => setVal(e.target.value)}
+                  placeholder={`${baseVal.toFixed(1)}`}
+                  style={{ display: 'block', width: '100%', marginTop: '0.35rem', padding: '0.5rem', background: 'var(--bg-dark)', border: '1px solid var(--panel-border)', color: '#fff', borderRadius: '4px', boxSizing: 'border-box' }}
+                />
+              </label>
+            ))}
           </div>
         )}
         {/* Mode: target flow L/min */}
@@ -229,15 +274,16 @@ export function DigitalTwinPanel({
         </div>
         {/* Hydraulic breakdown in display pressure units */}
         <div style={{ borderTop: '1px solid var(--panel-border)', paddingTop: '0.8rem' }}>
-          <div style={rs}><span>{t.twin_pv_used}</span><span style={vs}>{simPv.toFixed(1)}</span></div>
-          <div style={rs}><span>{t.twin_yp_used}</span><span style={vs}>{simYp.toFixed(1)}</span></div>
+          <div style={rs}><span>{t.twin_k_used || 'K (calc)'}</span><span style={vs}>{simK.toFixed(3)}</span></div>
+          <div style={rs}><span>{t.twin_n_used || 'n (calc)'}</span><span style={vs}>{simN.toFixed(3)}</span></div>
           <div style={rs}>
-            <span>{t.twin_visc_twin}</span>
-            <span style={vs}>{vt.toFixed(2)}</span>
+            <span>{t.twin_surface}</span>
+            <span style={vs}>{toDisplayPressure(hyd.surfacePsi)}</span>
           </div>
+          <div style={rs}><span>{t.twin_drill_string || t.twin_inner}</span><span style={vs}>{toDisplayPressure(hyd.innerPipePsi)}</span></div>
           <div style={rs}><span>{t.twin_bit}</span><span style={vs}>{toDisplayPressure(hyd.bitPsi)}</span></div>
-          <div style={rs}><span>{t.twin_inner}</span><span style={vs}>{toDisplayPressure(hyd.innerPipePsi)}</span></div>
-          <div style={rs}><span>{t.twin_annulus}</span><span style={vs}>{toDisplayPressure(hyd.annulusPsi)}</span></div>
+          <div style={rs}><span>{t.twin_annulus_open || 'Anülüs (Açık Kuyu)'}</span><span style={vs}>{toDisplayPressure(hyd.annulusOpenPsi)}</span></div>
+          <div style={rs}><span>{t.twin_annulus_cased || 'Anülüs (Casing)'}</span><span style={vs}>{toDisplayPressure(hyd.annulusCasedPsi)}</span></div>
           <div style={rs}>
             <span>{t.twin_standpipe}</span>
             <span style={vs}>{toDisplayPressure(hyd.standpipePsi)}</span>

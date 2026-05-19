@@ -1,60 +1,60 @@
-﻿/**
- * @fileoverview Client-side drilling hydraulics for the dashboard “digital twin” preview.
- * These routines mirror the physics layer in `mock_data_gen.py` (same K_YP, friction power law,
- * annulus hydraulic diameter). Any intentional change to formulas or units must be kept in sync
- * with the Python simulator to avoid divergent pump-pressure estimates between live data and preview.
- */
-
-/** YP contribution weight inside the empirical viscous term (must match `mock_data_gen.py`). */
-export const K_YP_IN_PIPE_TERM = 0.22;
-
 /**
- * Combined viscous proxy used in pipe and annulus friction (not a lab rheometer reading).
- * @param {number} pv Plastic viscosity (cP)
- * @param {number} yp Yield point (lbf/100ft²)
- * @returns {number}
+ * @fileoverview Client-side drilling hydraulics for the dashboard "digital twin" preview.
+ * These routines mirror the physics layer in mock_data_gen.py (YPL model).
  */
-export function viscTwin(pv, yp) {
-  return Number(pv) + 5 + K_YP_IN_PIPE_TERM * Number(yp);
+
+function calculate_re_c(n) {
+    return (6464 * n) / (Math.pow(1 + 3*n, 2) * Math.pow(2 + n, (2+n)/(1+n)));
 }
 
-/**
- * Industry-style empirical pressure loss in circular conduit (simplified Bingham-style proxy).
- * @param {number} lengthFt Segment length in feet
- * @param {number} dEffIn Effective hydraulic diameter in inches (bore ID or annulus gap)
- * @param {number} qGpm Flow rate in US gallons per minute
- * @param {number} viscousTerm Output of {@link viscTwin}
- * @returns {number} Pressure drop in PSI for that segment
- */
-function frictionPsi(lengthFt, dEffIn, qGpm, viscousTerm) {
-  if (!Number.isFinite(lengthFt) || lengthFt <= 0) return 0;
-  if (!Number.isFinite(dEffIn) || dEffIn <= 0) return 0;
-  if (!Number.isFinite(qGpm) || qGpm <= 0) return 0;
-  if (!Number.isFinite(viscousTerm) || viscousTerm <= 0) return 0;
-  return (lengthFt * viscousTerm * qGpm) / (1500 * dEffIn ** 2.5);
+function hb_pressure_drop_pipe_si(v, d, L, n, tau_0_si, K_si, rho) {
+    if (v <= 0 || d <= 0 || L <= 0) return 0.0;
+    const term1 = (3*n + 1) / (4*n);
+    let K_safe = K_si <= 0 ? 1e-6 : K_si;
+    const Re_g = (rho * Math.pow(d, n) * Math.pow(v, 2-n)) / (K_safe * Math.pow(8, n-1) * Math.pow(term1, n));
+    const Re_c = calculate_re_c(n);
+    
+    if (Re_g <= Re_c) {
+        return (4 * L / d) * (tau_0_si + K_safe * Math.pow(term1, n) * Math.pow(8*v / d, n));
+    } else {
+        const a = (1.1025 * Math.pow(n, 0.18)) / 100.0;
+        const b = 0.263 * Math.pow(n, 0.033);
+        const f = a / Math.max(1e-6, Math.pow(Re_g, b));
+        return (2 * f * rho * Math.pow(v, 2) * L) / d;
+    }
 }
 
-/** Parse casing shoe / liner intervals from BHA config JSON string. */
+function hb_pressure_drop_annulus_si(v, d_o, d_i, L, n, tau_0_si, K_si, rho) {
+    const d_eq = d_o - d_i;
+    if (v <= 0 || d_eq <= 0 || L <= 0) return 0.0;
+    const term1 = (2*n + 1) / (3*n);
+    let K_safe = K_si <= 0 ? 1e-6 : K_si;
+    const Re_g = (rho * Math.pow(d_eq, n) * Math.pow(v, 2-n)) / (K_safe * Math.pow(12, n-1) * Math.pow(term1, n));
+    const Re_c = calculate_re_c(n);
+    
+    if (Re_g <= Re_c) {
+        return (4 * L / d_eq) * (tau_0_si + K_safe * Math.pow(term1, n) * Math.pow(12*v / d_eq, n));
+    } else {
+        const a = (1.1025 * Math.pow(n, 0.18)) / 100.0;
+        const b = 0.263 * Math.pow(n, 0.033);
+        const f = a / Math.max(1e-6, Math.pow(Re_g, b));
+        return (2 * f * rho * Math.pow(v, 2) * L) / d_eq;
+    }
+}
+
 function parseCasings(config) {
   try {
     const c = JSON.parse(config?.casings || '[]');
     return Array.isArray(c) ? c : [];
-  } catch {
-    return [];
-  }
+  } catch { return []; }
 }
 
-/** Convert measured depth from meters (API) to native MD used in config (m or ft). */
 function depthMToNative(depthM, lengthUnit) {
   const d = Number(depthM);
   if (!Number.isFinite(d) || d < 0) return 0;
   return lengthUnit === 'ft' ? d * 3.28084 : d;
 }
 
-/**
- * Inner diameter of the open hole at a given MD: smallest casing ID whose interval contains MD,
- * else open-hole bit diameter.
- */
 function holeIdAtMd(mdNative, casings, bitDiameterIn) {
   const candidates = [];
   for (const row of casings) {
@@ -70,10 +70,6 @@ function holeIdAtMd(mdNative, casings, bitDiameterIn) {
   return Math.min(...candidates);
 }
 
-/**
- * OD / ID of the drill string at MD: DC2, DC1, then DP from bottom to top of string.
- * @returns {{ od: number, innerId: number }}
- */
 function pipeGeometryAtMd(mdNative, depthNative, cfg) {
   const dc1L = Number(cfg.dc1_length) || 0;
   const dc2L = Number(cfg.dc2_length) || 0;
@@ -85,7 +81,6 @@ function pipeGeometryAtMd(mdNative, depthNative, cfg) {
   const dc2Id = Number(cfg.dc2_id) || 0;
 
   if (depthNative <= 0) return { od: dpOd, innerId: dpId };
-
   const topDc2 = depthNative - dc2L;
   const topDc1 = depthNative - dc2L - dc1L;
 
@@ -94,9 +89,6 @@ function pipeGeometryAtMd(mdNative, depthNative, cfg) {
   return { od: dpOd, innerId: dpId };
 }
 
-/**
- * Ordered MD breakpoints for annulus integration: surface, shoe depths, BHA segment tops, TD.
- */
 function collectBreakpoints(depthNative, casings, bhaLen, dc1L, dc2L) {
   const b = new Set([0, depthNative]);
   for (const row of casings) {
@@ -117,93 +109,27 @@ function collectBreakpoints(depthNative, casings, bhaLen, dc1L, dc2L) {
   return [...b].sort((a, b2) => a - b2);
 }
 
-/** Sum frictional losses inside DP + DCs using inner diameters as hydraulic diameter. */
-function innerPipePressurePsi(config, depthM, qGpm, viscousTerm) {
-  const lengthUnit = config?.length_unit || 'm';
-  const unitMult = lengthUnit === 'm' ? 3.28084 : 1.0;
-  const depthNative = depthMToNative(depthM, lengthUnit);
-
-  const dc1L = Number(config.dc1_length) || 0;
-  const dc2L = Number(config.dc2_length) || 0;
-  const bhaLen = dc1L + dc2L;
-  const dynDpL = Math.max(0, depthNative - bhaLen);
-
-  let sum = 0;
-  sum += frictionPsi(dynDpL * unitMult, Number(config.dp1_id) || 0, qGpm, viscousTerm);
-  sum += frictionPsi(dc1L * unitMult, Number(config.dc1_id) || 0, qGpm, viscousTerm);
-  sum += frictionPsi(dc2L * unitMult, Number(config.dc2_id) || 0, qGpm, viscousTerm);
-  return sum;
-}
-
 /**
- * Annulus losses: integrate along MD; each sub-interval uses D_ann = hole_id − pipe_OD at midpoint.
- */
-function annulusPressurePsi(config, depthM, qGpm, viscousTerm, bitDiameterIn) {
-  const lengthUnit = config?.length_unit || 'm';
-  const unitMult = lengthUnit === 'm' ? 3.28084 : 1.0;
-  const depthNative = depthMToNative(depthM, lengthUnit);
-  if (depthNative <= 0) return 0;
-
-  const casings = parseCasings(config);
-  const dc1L = Number(config.dc1_length) || 0;
-  const dc2L = Number(config.dc2_length) || 0;
-  const bhaLen = dc1L + dc2L;
-  const eps = 0.01;
-
-  const bps = collectBreakpoints(depthNative, casings, bhaLen, dc1L, dc2L);
-  let sum = 0;
-  for (let i = 0; i < bps.length - 1; i++) {
-    const md0 = bps[i];
-    const md1 = bps[i + 1];
-    const lenNative = md1 - md0;
-    if (lenNative <= 0) continue;
-    const mid = (md0 + md1) / 2;
-    const holeId = holeIdAtMd(mid, casings, bitDiameterIn);
-    const { od: pipeOd } = pipeGeometryAtMd(mid, depthNative, config);
-    const dAnn = holeId - pipeOd;
-    if (!Number.isFinite(dAnn) || dAnn <= eps) continue;
-    sum += frictionPsi(lenNative * unitMult, dAnn, qGpm, viscousTerm);
-  }
-  return sum;
-}
-
-/**
- * Full hydraulic snapshot for the twin preview: bit nozzles (TFA), string + annulus friction.
- * @param {object} p
- * @param {number} p.densitySg Mud specific gravity
- * @param {number} p.flowLpm Flow in liters per minute
- * @param {number} p.pv Plastic viscosity (cP)
- * @param {number} p.yp Yield point
- * @param {number} p.depthM Current hole depth (meters) from telemetry
- * @param {object} p.config BHA / casing fields from `bhaConfig` state
- * @param {number} [p.nozzleSizeThirtySeconds] Nozzle diameter in 1/32 inch
- * @param {number} [p.nozzleQty] Number of equal nozzles
- * @returns {{ bitPsi: number, innerPipePsi: number, annulusPsi: number, pumpPsi: number, standpipePsi: number }}
+ * Orchestrates the full hydraulic calculation for the drilling system.
+ * 
+ * 1. Computes Bit Pressure Drop (TFA based)
+ * 2. Computes Inner Pipe Friction (DP, DC1, DC2)
+ * 3. Computes Annulus Friction across all casing/open-hole breakpoints
+ * 4. Sums all components to find total pump and standpipe pressure
+ * 
+ * @param {object} p Configuration and telemetry state
+ * @returns {object} Breakdown of all pressure losses in PSI
  */
 export function computeHydraulicsPsi(p) {
-  const {
-    densitySg,
-    flowLpm,
-    pv,
-    yp,
-    depthM,
-    config,
-    nozzleSizeThirtySeconds,
-    nozzleQty,
-  } = p;
-
-  const qGpm = Number(flowLpm) * 0.264172;
-  const mwPpg = Number(densitySg) * 8.345;
-  const vt = viscTwin(pv, yp);
+  const { densitySg, flowLpm, n, k_si, tau0_si, depthM, config, nozzleSizeThirtySeconds, nozzleQty } = p;
+  const q_lpm = Number(flowLpm);
+  const rho_kgm3 = Number(densitySg) * 1000.0; // Convert Specific Gravity to kg/m^3
+  const n_val = Number(n);
+  const k_val = Number(k_si);
+  const tau0_val = Number(tau0_si);
 
   if (!config) {
-    return {
-      bitPsi: 0,
-      innerPipePsi: 0,
-      annulusPsi: 0,
-      pumpPsi: 0,
-      standpipePsi: 0,
-    };
+    return { bitPsi: 0, innerPipePsi: 0, annulusPsi: 0, pumpPsi: 0, standpipePsi: 0, surfacePsi: 0 };
   }
 
   const nSize = Number(nozzleSizeThirtySeconds ?? config.bit_nozzle_size ?? 12);
@@ -212,18 +138,133 @@ export function computeHydraulicsPsi(p) {
   let tfa = nozzles.reduce((acc, n) => acc + (Math.PI * (n / 32.0) ** 2) / 4, 0);
   if (!Number.isFinite(tfa) || tfa <= 0) tfa = 0.5;
 
+  const qGpm = q_lpm * 0.264172;
+  const mwPpg = Number(densitySg) * 8.345;
   const bitPsi = (mwPpg * qGpm ** 2) / (10858 * tfa ** 2);
-  const innerPipePsi = innerPipePressurePsi(config, depthM, qGpm, vt);
+  const bit_pd_pa = bitPsi / 0.000145038;
+
+  const lengthUnit = config?.length_unit || 'm';
+  const unit_to_m = lengthUnit === 'ft' ? 0.3048 : 1.0;
+  const depthNative = depthMToNative(depthM, lengthUnit);
+
+  const calc_pd_pipe_si = (length_native, inner_d_in) => {
+      const L_m = length_native * unit_to_m;
+      const d_m = inner_d_in * 0.0254;
+      if (L_m > 0 && d_m > 0) {
+          const A_m2 = Math.PI * Math.pow(d_m/2, 2);
+          const v = (q_lpm / 60000.0) / Math.max(1e-6, A_m2);
+          return hb_pressure_drop_pipe_si(v, d_m, L_m, n_val, tau0_val, k_val, rho_kgm3);
+      }
+      return 0.0;
+  };
+
+  const dc1L = Number(config.dc1_length) || 0;
+  const dc2L = Number(config.dc2_length) || 0;
+  const bhaLen = dc1L + dc2L;
+  const dynDpL = Math.max(0, depthNative - bhaLen);
+
+  let pipe_pd_pa = 0;
+  pipe_pd_pa += calc_pd_pipe_si(dynDpL, Number(config.dp1_id) || 0);
+  pipe_pd_pa += calc_pd_pipe_si(dc1L, Number(config.dc1_id) || 0);
+  pipe_pd_pa += calc_pd_pipe_si(dc2L, Number(config.dc2_id) || 0);
+
   const bitD = Number(config.bit_diameter) || 8.5;
-  const annulusPsi = annulusPressurePsi(config, depthM, qGpm, vt, bitD);
-  const pumpPsi = bitPsi + innerPipePsi + annulusPsi;
-  const standpipePsi = pumpPsi * 0.95;
+  const casings = parseCasings(config);
+  const bps = collectBreakpoints(depthNative, casings, bhaLen, dc1L, dc2L);
+  let annulus_open_pa = 0;
+  let annulus_cased_pa = 0;
+  for (let i = 0; i < bps.length - 1; i++) {
+    const md0 = bps[i];
+    const md1 = bps[i + 1];
+    const lenNative = md1 - md0;
+    if (lenNative <= 0) continue;
+    const mid = (md0 + md1) / 2;
+    const holeId = holeIdAtMd(mid, casings, bitD);
+    const { od: pipeOd } = pipeGeometryAtMd(mid, depthNative, config);
+    const dAnn = holeId - pipeOd;
+    if (!Number.isFinite(dAnn) || dAnn <= 0.01) continue;
+    
+    const d_o_m = holeId * 0.0254;
+    const d_i_m = pipeOd * 0.0254;
+    const L_m = lenNative * unit_to_m;
+    const A_m2 = Math.PI * (Math.pow(d_o_m/2, 2) - Math.pow(d_i_m/2, 2));
+    const v = (q_lpm / 60000.0) / Math.max(1e-6, A_m2);
+    const dp = hb_pressure_drop_annulus_si(v, d_o_m, d_i_m, L_m, n_val, tau0_val, k_val, rho_kgm3);
+    const isCased = casings.some(row => mid >= Math.min(row.start || 0, row.end || 0) && mid < Math.max(row.start || 0, row.end || 0));
+    if (isCased) {
+      annulus_cased_pa += dp;
+    } else {
+      annulus_open_pa += dp;
+    }
+  }
+
+  const dP_surface_psi = 12.0 * densitySg * Math.pow(q_lpm / 1000.0, 1.86);
+  const innerPipePsi = pipe_pd_pa * 0.000145038;
+  const annulusOpenPsi = annulus_open_pa * 0.000145038;
+  const annulusCasedPsi = annulus_cased_pa * 0.000145038;
+  const annulusPsi = annulusOpenPsi + annulusCasedPsi;
+  const pumpPsi = dP_surface_psi + bitPsi + innerPipePsi + annulusPsi;
+  const standpipePsi = pumpPsi * 0.98;
 
   return {
     bitPsi,
     innerPipePsi,
     annulusPsi,
+    annulusOpenPsi,
+    annulusCasedPsi,
     pumpPsi,
     standpipePsi,
+    surfacePsi: dP_surface_psi
   };
+}
+
+/**
+ * Calculates the total fluid volume of the wellbore system (inner pipe + annulus) in cubic meters.
+ * Used for estimating total chemical requirement (Calcite/Barite) for the entire drilling system.
+ * 
+ * @param {number} depthM Current bit depth in meters
+ * @param {object} config BHA and Casing configuration object
+ * @returns {number} Total wellbore volume (m^3)
+ */
+export function computeSystemVolumeM3(depthM, config) {
+  if (!config) return 0;
+  let vol = 0;
+  const lengthUnit = config.length_unit || 'm';
+  const unit_to_m = lengthUnit === 'ft' ? 0.3048 : 1.0;
+  const depthNative = depthMToNative(depthM, lengthUnit);
+
+  const dc1L = Number(config.dc1_length) || 0;
+  const dc2L = Number(config.dc2_length) || 0;
+  const bhaLen = dc1L + dc2L;
+  const dynDpL = Math.max(0, depthNative - bhaLen);
+
+  const addPipeVol = (lenNat, idIn) => {
+    if (lenNat <= 0 || idIn <= 0) return;
+    const L = lenNat * unit_to_m;
+    const r = (idIn * 0.0254) / 2;
+    vol += Math.PI * r * r * L;
+  };
+  addPipeVol(dynDpL, Number(config.dp1_id) || 0);
+  addPipeVol(dc1L, Number(config.dc1_id) || 0);
+  addPipeVol(dc2L, Number(config.dc2_id) || 0);
+
+  const bitD = Number(config.bit_diameter) || 8.5;
+  const casings = parseCasings(config);
+  const bps = collectBreakpoints(depthNative, casings, bhaLen, dc1L, dc2L);
+  for (let i = 0; i < bps.length - 1; i++) {
+    const md0 = bps[i];
+    const md1 = bps[i + 1];
+    const lenNative = md1 - md0;
+    if (lenNative <= 0) continue;
+    const mid = (md0 + md1) / 2;
+    const holeId = holeIdAtMd(mid, casings, bitD);
+    const { od: pipeOd } = pipeGeometryAtMd(mid, depthNative, config);
+    const dAnn = holeId - pipeOd;
+    if (!Number.isFinite(dAnn) || dAnn <= 0) continue;
+    const L = lenNative * unit_to_m;
+    const rH = (holeId * 0.0254) / 2;
+    const rP = (pipeOd * 0.0254) / 2;
+    vol += Math.PI * (rH * rH - rP * rP) * L;
+  }
+  return vol;
 }
