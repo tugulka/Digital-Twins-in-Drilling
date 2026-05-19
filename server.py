@@ -1,9 +1,16 @@
 """
-HTTP API for the drilling dashboard. Reads/writes SQLite (`sensor_data.db`):
-- Features a lightweight FastAPI backend routing.
-- Rows are appended continuously by the physics simulator (`mock_data_gen.py`).
-- `GET /api/latest-data` and `GET /api/history` feed the React charts and cards natively.
-- `GET /api/config` and `POST /api/config` store BHA/wellbore properties to influence simulation physics.
+HTTP API for the drilling dashboard. Reads/writes SQLite (`sensor_data.db`).
+
+Responsibilities:
+    - Serve the latest sensor row for 1 Hz dashboard polling (`/api/latest-data`).
+    - Serve downsampled history for Recharts (`/api/history`) so long windows do not overload the browser.
+    - Persist BHA / casing / bit configuration (`sim_config`) so `mock_data_gen.py` picks it up on the next tick.
+
+Process model:
+    Run **after** `mock_data_gen.py` has created tables; `POST /api/config` recreates `sim_config` with a single row (id=1).
+
+Listen address:
+    `uvicorn` binds `0.0.0.0:8000` at the bottom of this file.
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,9 +23,15 @@ from typing import Optional
 
 app = FastAPI()
 
+
 class SimConfig(BaseModel):
+    """
+    Payload for `POST /api/config`: mirrors the keys the React Wellbore & BHA modal edits.
+    Optional target_* fields are legacy hooks for the simulator to bias density / YP / flow.
+    """
     target_density: Optional[float] = None
-    target_yp: Optional[float] = None
+    target_k: Optional[float] = None
+    target_n: Optional[float] = None
     target_flow_rate: Optional[float] = None
     casings: str
     length_unit: str
@@ -126,7 +139,7 @@ def get_config():
             "dc1_id": 2.50, "dc1_od": 4.75, "dc1_length": 200,
             "dc2_id": 0, "dc2_od": 0, "dc2_length": 0,
             "bit_diameter": 6.0, "bit_nozzle_size": 12, "bit_nozzle_qty": 3,
-            "target_density": None, "target_yp": None, "target_flow_rate": None
+            "target_density": None, "target_k": None, "target_n": None, "target_flow_rate": None
         }
 
 @app.post("/api/config")
@@ -149,7 +162,7 @@ def set_config(config: SimConfig):
             dc1_id REAL, dc1_od REAL, dc1_length REAL,
             dc2_id REAL, dc2_od REAL, dc2_length REAL,
             bit_diameter REAL, bit_nozzle_size REAL, bit_nozzle_qty INTEGER,
-            target_density REAL, target_yp REAL, target_flow_rate REAL
+            target_density REAL, target_k REAL, target_n REAL, target_flow_rate REAL
         )
     ''')
     cursor.execute('''
@@ -157,14 +170,14 @@ def set_config(config: SimConfig):
             id, casings, length_unit, bit_diameter, bit_nozzle_size, bit_nozzle_qty,
             dp1_id, dp1_od, dp1_length,
             dc1_id, dc1_od, dc1_length, dc2_id, dc2_od, dc2_length,
-            target_density, target_yp, target_flow_rate
+            target_density, target_k, target_n, target_flow_rate
         ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (
         config.casings, config.length_unit, config.bit_diameter, config.bit_nozzle_size, config.bit_nozzle_qty,
         config.dp1_id, config.dp1_od, config.dp1_length,
         config.dc1_id, config.dc1_od, config.dc1_length,
         config.dc2_id, config.dc2_od, config.dc2_length,
-        config.target_density, config.target_yp, config.target_flow_rate
+        config.target_density, config.target_k, config.target_n, config.target_flow_rate
     ))
     conn.commit()
     conn.close()

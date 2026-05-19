@@ -1,15 +1,31 @@
 /**
- * Drilling digital-twin dashboard: React UI talks to a local FastAPI server that reads
- * SQLite rows written by mock_data_gen.py. Raw sensor fields are stored in SI-friendly
- * bases (e.g. pressure in PSI, flow in L/min); this file converts for display units.
+ * @fileoverview Drilling digital-twin dashboard — single-page React application.
+ *
+ * Data flow:
+ *   1. `mock_data_gen.py` appends rows to `sensor_data.db`.
+ *   2. `server.py` exposes `/api/latest-data`, `/api/history`, `/api/config`.
+ *   3. This file polls **port 8000** for JSON; never assumes Vite’s dev port for API.
+ *
+ * Major UI regions (see `return` in `App`):
+ *   - Header: locale clock, language toggle, connection badge, total depth shortcut.
+ *   - Settings bar: Wellbore & BHA modal, digital-twin “Change” strip, unit pickers.
+ *   - Sensor grids: `SensorCard`, `PumpCard`, `TankCard`, grouped `RheologyCard`.
+ *   - Modals: time-series chart, `DigitalTwinPanel` (preview-only), BHA JSON editor.
+ *
+ * Raw DB/API bases: pressure PSI, flow L/min, depth m, mud density SG, ROP m/h unless converted.
  */
 import React, { useState, useEffect } from 'react';
 import './index.css';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
+import { DigitalTwinPanel } from './DigitalTwinPanel';
 
 /** 1 PSI ≈ 0.0689476 bar (same factor used in convertValue and pump gauge scaling). */
 const PSI_TO_BAR = 0.0689476;
 
+/**
+ * UI strings for TR / EN. Keys are referenced as `t.key` throughout JSX.
+ * Twin-related keys feed {@link DigitalTwinPanel}; keep both language blocks in sync.
+ */
 const DICTIONARY = {
   TR: {
     app_title: "Sondaj İçin Dijital İkiz Paneli",
@@ -26,6 +42,16 @@ const DICTIONARY = {
     pump_name: "Pompa Basıncı",
     standpipe_name: "Standpipe Basıncı",
     temp_name: "Çamur Sıcaklığı",
+    prop_name: "Çamur Bilgileri",
+    tau0_name: "Akma Gerilmesi (τ0)",
+    k_name: "Kıvam İndeksi (K)",
+    t600_name: "θ_600",
+    t300_name: "θ_300",
+    t200_name: "θ_200",
+    t100_name: "θ_100",
+    t6_name: "θ_6",
+    t3_name: "θ_3",
+    viscometer_name: "Viskometre Okumaları",
     yp_name: "Akma Gerilmesi",
     pv_name: "Kıvam İndeksi",
     n_name: "Akış Davranış İndeksi",
@@ -52,7 +78,37 @@ const DICTIONARY = {
     alarm_dismiss: "MÜDAHALE ET / SUSTUR",
     alarm_thresh_influx: "Influx Eşiği",
     alarm_thresh_loss: "Kaçak Eşiği",
-    alarm_dev: "sapma"
+    alarm_dev: "sapma",
+    twin_note: "Önizleme — sunucuya yazılmaz.",
+    twin_density_title: "Yoğunluğu değiştir (önizleme)",
+    twin_rheo_title: "Reoloji (önizleme)",
+    twin_nozzle_title: "Nozzle (önizleme)",
+    twin_flow_title: "Akış (önizleme)",
+    twin_agent: "Katı madde",
+    twin_calcite: "Kalsit",
+    twin_barite: "Barit",
+    twin_target_density: "Hedef yoğunluk",
+    twin_kg_per_ton: "1 ton çamur için eklenecek miktar",
+    twin_total_system_chem: "Tüm Sistem İçin Gerekli Kimyasal (Kuyu + Tank)",
+    twin_overflow: "Tank taşma hacmi",
+    twin_pump_warn: "Maks. pompa basıncı aşıldı",
+    twin_bit: "Bit ΔP",
+    twin_inner: "İç boru",
+    twin_annulus: "Annülüs",
+    twin_total: "Tahmini pompa",
+    
+    twin_k_used: "K (hesap)",
+twin_n_used: "n (hesap)",
+    twin_target_k: "Hedef K (Pa.s^n)",
+twin_target_n: "Hedef n",
+    
+    twin_target_flow: "Hedef akış (L/min)",
+    twin_target_nozzle: "Hedef nozzle (1/32 in)",
+    twin_close: "Kapat",
+    twin_surface: "Yüzey Kaybı (Surface)",
+    twin_unit_kg: "kg",
+    twin_standpipe: "Standpipe (tahmini)",
+    twin_est_pump_blurb: "Bu değerlerle tahmini pompa basıncı:"
   },
   EN: {
     app_title: "Digital Twins in Drilling Panel",
@@ -69,6 +125,16 @@ const DICTIONARY = {
     pump_name: "Pump Pressure",
     standpipe_name: "Standpipe Pressure",
     temp_name: "Mud Temperature",
+    prop_name: "Mud Properties",
+    tau0_name: "Yield Stress (τ0)",
+    k_name: "Consistency Index (K)",
+    t600_name: "θ_600",
+    t300_name: "θ_300",
+    t200_name: "θ_200",
+    t100_name: "θ_100",
+    t6_name: "θ_6",
+    t3_name: "θ_3",
+    viscometer_name: "Viscometer Readings",
     yp_name: "Yield Point",
     pv_name: "Plastic Viscosity",
     n_name: "Flow Behavior Index",
@@ -95,11 +161,50 @@ const DICTIONARY = {
     alarm_dismiss: "ACKNOWLEDGE / MUTE",
     alarm_thresh_influx: "Influx Threshold",
     alarm_thresh_loss: "Loss Threshold",
-    alarm_dev: "deviation"
+    alarm_dev: "deviation",
+    twin_note: "Preview only — nothing is sent to the server.",
+    twin_density_title: "Change density (preview)",
+    twin_rheo_title: "Rheology (preview)",
+    twin_nozzle_title: "Nozzle (preview)",
+    twin_flow_title: "Flow (preview)",
+    twin_agent: "Weighting agent",
+    twin_calcite: "Calcite",
+    twin_barite: "Barite",
+    twin_target_density: "Target density",
+    twin_kg_per_ton: "Solids for 1 metric ton of mud",
+    twin_total_system_chem: "Total System Chemical Req. (Wellbore + Tank)",
+    twin_overflow: "Tank overflow",
+    twin_pump_warn: "Max pump pressure exceeded",
+    twin_bit: "Bit ΔP",
+    twin_inner: "Inner pipe",
+    twin_annulus: "Annulus",
+    twin_total: "Pompa Basıncı",
+    
+    twin_k_used: "K (calc)",
+twin_n_used: "n (calc)",
+    twin_target_k: "Target K (Pa.s^n)",
+twin_target_n: "Target n",
+    
+    twin_target_flow: "Target flow (L/min)",
+    twin_target_nozzle: "Target nozzle (1/32 in)",
+    twin_close: "Close",
+    twin_surface: "Yüzey Basınç Kaybı",
+    twin_drill_string: "Sondaj Dizisi",
+    twin_annulus_open: "Anülüs (Açık Kuyu)",
+    twin_annulus_cased: "Anülüs (Casing)",
+    twin_unit_kg: "kg",
+    twin_standpipe: "Standpipe Basıncı",
+    twin_est_pump_blurb: "Estimated pump pressure for these values:"
   }
 };
 
-/** Map API numeric fields to the unit system selected in the settings bar. */
+/**
+ * Map one API numeric field from canonical DB units to the user-selected display system.
+ * @param {number|undefined|null} val Raw value from SQLite row
+ * @param {'rop'|'flow'|'pressure'|'temp'|'density'|'depth'|'none'} type Which conversion branch to use
+ * @param {object} units Current `units` state object from `App`
+ * @returns {number|undefined|null} Converted number, or passthrough if unknown
+ */
 const convertValue = (val, type, units) => {
   if (val === undefined || val === null) return val;
   let v = Number(val);
@@ -125,6 +230,11 @@ const convertValue = (val, type, units) => {
   }
 };
 
+/**
+ * Build the ordered list of dashboard metrics (id matches DB column names).
+ * @param {object} units Display unit bundle
+ * @param {'TR'|'EN'} lang Active dictionary language
+ */
 const getSensorsConfig = (units, lang) => {
   const t = DICTIONARY[lang];
   const ropUnit = lang === 'TR' ? units.rop.replace('/h', '/sa') : units.rop;
@@ -138,6 +248,14 @@ const getSensorsConfig = (units, lang) => {
     { id: 'Standpipe_Press_psi', type: 'pressure', name: t.standpipe_name, unit: units.pressure, icon: '🏗️' },
     { id: 'Mud_Temp_C', type: 'temp', name: t.temp_name, unit: units.temp, icon: '🌡️' },
     { id: 'Yield_Point', type: 'none', name: t.yp_name, unit: 'lbf/100ft²', icon: '💧' },
+    { id: 'tau0_si', type: 'none', name: t.tau0_name, unit: 'Pa', icon: '💧' },
+    { id: 'K_si', type: 'none', name: t.k_name, unit: 'Pa.s^n', icon: '🧪' },
+    { id: 'theta_600', type: 'none', name: t.t600_name, unit: 'lb/100ft²', icon: '🔄' },
+    { id: 'theta_300', type: 'none', name: t.t300_name, unit: 'lb/100ft²', icon: '🔄' },
+    { id: 'theta_200', type: 'none', name: t.t200_name, unit: 'lb/100ft²', icon: '🔄' },
+    { id: 'theta_100', type: 'none', name: t.t100_name, unit: 'lb/100ft²', icon: '🔄' },
+    { id: 'theta_6', type: 'none', name: t.t6_name, unit: 'lb/100ft²', icon: '🔄' },
+    { id: 'theta_3', type: 'none', name: t.t3_name, unit: 'lb/100ft²', icon: '🔄' },
     { id: 'Plastic_Viscosity', type: 'none', name: t.pv_name, unit: 'cP', icon: '🧪' },
     { id: 'Flow_Behavior_Index', type: 'none', name: t.n_name, unit: 'n', icon: '📊' },
     { id: 'Mud_Density_SG', type: 'density', name: t.density_name, unit: units.density, icon: '⚖️' },
@@ -145,6 +263,10 @@ const getSensorsConfig = (units, lang) => {
   ];
 };
 
+/**
+ * Compact numeric tile with optional delta vs previous poll (trend arrow + diff).
+ * Opens the chart modal when the whole card is clicked.
+ */
 function SensorCard({ sensor, value, previousValue, onClick, t }) {
   const [changed, setChanged] = useState(false);
 
@@ -185,6 +307,10 @@ function SensorCard({ sensor, value, previousValue, onClick, t }) {
   );
 }
 
+/**
+ * Composite card: YP, PV, n, density in one column with per-field trends.
+ * Uses `convertValue` so density/… respect the global unit dropdown.
+ */
 function RheologyCard({ group, latest, previous, onClick, t, units }) {
     const [changed, setChanged] = useState(false);
   
@@ -207,8 +333,8 @@ function RheologyCard({ group, latest, previous, onClick, t, units }) {
     return (
       <div className={`sensor-card ${changed ? 'value-changed' : ''}`} onClick={onClick} style={{ cursor: 'pointer' }}>
         <div className="card-header" style={{ marginBottom: '1.25rem' }}>
-          <span className="card-title">{t.app_title.includes('Dijital') ? 'Çamur Reolojisi' : 'Mud Rheology'}</span>
-          <span className="card-icon">🧪</span>
+          <span className="card-title">{group.titleKey ? t[group.titleKey] : (t.app_title.includes('Dijital') ? 'Çamur Reolojisi' : 'Mud Rheology')}</span>
+          <span className="card-icon">{group.icon || "🧪"}</span>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
            {group.sensors.map(s => {
@@ -237,15 +363,21 @@ function RheologyCard({ group, latest, previous, onClick, t, units }) {
     );
 }
 
-function TankCard({ sensor, value, previousValue, bhaConfig, latest, onClick, t }) {
+/**
+ * Mud pit % with visual tank, pit geometry + volume unit settings, and pit gain/loss heuristics.
+ * Maintains a short ring buffer of level samples to estimate dV/dt, compares to theoretical
+ * rock displacement from ROP × bit area for optional influx / loss alarms (see effects below).
+ */
+function TankCard({ sensor, value, previousValue, bhaConfig, latest, onClick, t, tankDim, setTankDim, tankDimUnit, setTankDimUnit, tankVolUnit, setTankVolUnit }) {
   // --- UI States ---
   const [changed, setChanged] = useState(false); // Triggers visual flash on value change
   const [showSettings, setShowSettings] = useState(false);
-  const [dimUnit, setDimUnit] = useState('m'); // Base unit for tank dimensions
-  const [volUnit, setVolUnit] = useState('m³'); // Selected unit for volume display
-
-  // --- Configuration States ---
-  const [dim, setDim] = useState({ length: 12, width: 3.5, height: 2.5 }); // Tank dimensions
+  const dimUnit = tankDimUnit;
+  const setDimUnit = setTankDimUnit;
+  const volUnit = tankVolUnit;
+  const setVolUnit = setTankVolUnit;
+  const dim = tankDim;
+  const setDim = setTankDim;
   const [alarmThresholdInflux, setAlarmThresholdInflux] = useState(1.0);
   const [alarmThresholdLoss, setAlarmThresholdLoss] = useState(1.0);
   const [influxAlarmSet, setInfluxAlarmSet] = useState(false);
@@ -269,13 +401,15 @@ function TankCard({ sensor, value, previousValue, bhaConfig, latest, onClick, t 
     }, 0);
 
     // Buffer the current value and current time to establish mathematical rate
-    setLocalHistory(prev => {
+    queueMicrotask(() => {
+      setLocalHistory((prev) => {
         const now = Date.now();
-        // Discard data older than recent buffer window to maintain memory efficiency 
+        // Discard data older than recent buffer window to maintain memory efficiency
         // We keep up to 10 instances representing ~20 seconds of real-time server activity.
         const updated = [...prev, { val: Number(value), time: now }];
         if (updated.length > 8) updated.shift();
         return updated;
+      });
     });
 
     return () => {
@@ -360,21 +494,23 @@ function TankCard({ sensor, value, previousValue, bhaConfig, latest, onClick, t 
       const now = Date.now();
       const canTriggerNewAlarm = (now - lastAlarmTime) >= 60000;
 
-      if (nextAlarmType) {
+      queueMicrotask(() => {
+        if (nextAlarmType) {
           if (activeAlarmType !== nextAlarmType) {
-              if (canTriggerNewAlarm) {
-                  setActiveAlarmType(nextAlarmType);
-                  setLastAlarmTime(now);
-                  setIsAlarmMuted(false);
-              } else if (activeAlarmType !== null) {
-                  setActiveAlarmType(null);
-                  setIsAlarmMuted(false);
-              }
+            if (canTriggerNewAlarm) {
+              setActiveAlarmType(nextAlarmType);
+              setLastAlarmTime(now);
+              setIsAlarmMuted(false);
+            } else if (activeAlarmType !== null) {
+              setActiveAlarmType(null);
+              setIsAlarmMuted(false);
+            }
           }
-      } else {
+        } else {
           setActiveAlarmType(null);
           setIsAlarmMuted(false); // Reset mute layer returning to safety
-      }
+        }
+      });
   }, [currentRate, bhaConfig, latest, volUnit, alarmThresholdInflux, alarmThresholdLoss, influxAlarmSet, lossAlarmSet, isAlarmMuted, activeAlarmType, lastAlarmTime, localHistory.length]);
 
   // Utility to handle alarm dismissal popup
@@ -497,9 +633,8 @@ function TankCard({ sensor, value, previousValue, bhaConfig, latest, onClick, t 
  * (PSI or bar). The scale maximum is stored canonically in PSI so the needle ratio
  * stays correct when the user switches units without duplicating state in an effect.
  */
-function PumpCard({ sensor, value, onClick, t, pressureUnit }) {
+function PumpCard({ sensor, value, onClick, t, pressureUnit, maxPressurePsi, setMaxPressurePsi }) {
   const [showSettings, setShowSettings] = useState(false);
-  const [maxPressurePsi, setMaxPressurePsi] = useState(5000);
   const [linerRadius, setLinerRadius] = useState(6.0);
   const [lrUnit, setLrUnit] = useState('in');
 
@@ -575,6 +710,10 @@ function PumpCard({ sensor, value, onClick, t, pressureUnit }) {
   );
 }
 
+/**
+ * Root component: owns global polling state, BHA config mirror, chart modal, twin preview, and layout.
+ * Side effects are grouped by concern (latest poll, initial config fetch, history chart, i18n refresh).
+ */
 function App() {
   const [globalLatest, setGlobalLatest] = useState(null);
   const [globalPrev, setGlobalPrev] = useState(null);
@@ -599,13 +738,11 @@ function App() {
       dp2_id: 0, dp2_od: 0, dp2_length: 0,
       dc1_id: 2.50, dc1_od: 4.75, dc1_length: 200,
       dc2_id: 0, dc2_od: 0, dc2_length: 0,
-      target_density: null, target_yp: null, target_flow_rate: null
+      target_density: null, target_k: null, target_n: null, target_flow_rate: null
   });
 
   // Digital Twin Control State
   const [activeChangeParam, setActiveChangeParam] = useState(null); // 'density', 'yp', 'nozzle', 'flow'
-  const [changeInputValue, setChangeInputValue] = useState('');
-  const [changeInputUnit, setChangeInputUnit] = useState('');
 
   const [chartData, setChartData] = useState([]);
   const [timeRange, setTimeRange] = useState('live');
@@ -639,6 +776,11 @@ function App() {
   });
   const [selectedUnitParam, setSelectedUnitParam] = useState('rop');
 
+  const [tankDim, setTankDim] = useState({ length: 12, width: 3.5, height: 2.5 });
+  const [tankDimUnit, setTankDimUnit] = useState('m');
+  const [tankVolUnit, setTankVolUnit] = useState('m³');
+  const [maxPumpPressurePsi, setMaxPumpPressurePsi] = useState(5000);
+
   const SENSORS = getSensorsConfig(units, lang);
   const currentDepthValue =
     globalLatest?.Current_Depth_m !== undefined
@@ -658,14 +800,31 @@ function App() {
     SENSORS.find(s => s.id === 'Mud_Temp_C')
   ];
 
+  const propertiesGroup = {
+    isGroup: true,
+    titleKey: 'prop_name',
+    icon: '🌡️',
+    sensors: [
+       SENSORS.find(s => s.id === 'Mud_Temp_C'),
+       SENSORS.find(s => s.id === 'Mud_Density_SG'),
+       SENSORS.find(s => s.id === 'tau0_si'),
+       SENSORS.find(s => s.id === 'K_si'),
+       SENSORS.find(s => s.id === 'Flow_Behavior_Index')
+    ].filter(Boolean)
+  };
+
   const rheologyGroup = {
     isGroup: true,
+    titleKey: 'viscometer_name',
+    icon: '🧪',
     sensors: [
-       SENSORS.find(s => s.id === 'Yield_Point'),
-       SENSORS.find(s => s.id === 'Plastic_Viscosity'),
-       SENSORS.find(s => s.id === 'Flow_Behavior_Index'),
-       SENSORS.find(s => s.id === 'Mud_Density_SG')
-    ]
+       SENSORS.find(s => s.id === 'theta_600'),
+       SENSORS.find(s => s.id === 'theta_300'),
+       SENSORS.find(s => s.id === 'theta_200'),
+       SENSORS.find(s => s.id === 'theta_100'),
+       SENSORS.find(s => s.id === 'theta_6'),
+       SENSORS.find(s => s.id === 'theta_3')
+    ].filter(Boolean)
   };
 
   /** Poll latest row for cards and connection status. */
@@ -674,9 +833,26 @@ function App() {
       try {
         const response = await fetch('http://localhost:8000/api/latest-data');
         if (!response.ok) throw new Error('Network Issue');
+        
+        const addRheo = (item) => {
+             if(!item) return item;
+             const t600 = item.theta_600 || 60;
+             const t300 = item.theta_300 || 40;
+             const t3 = item.theta_3 || 5;
+             let n = 0.5;
+             const num = Math.max(0.1, t600 - t3);
+             const den = Math.max(0.1, t300 - t3);
+             if (den > 0) n = 3.321928 * Math.log10(num / den);
+             n = Math.max(0.1, Math.min(0.99, n));
+             item.tau0_si = t3 * 0.4788;
+             item.K_si = ((t300 - t3) / Math.pow(511, n)) * 0.4788 * Math.pow(1.703, n);
+             return item;
+        };
+
         const json = await response.json();
         
         if (!json.error) {
+           addRheo(json);
            setGlobalLatest(prev => {
              if (prev && prev.id !== json.id) setGlobalPrev(prev);
              return json;
@@ -697,7 +873,7 @@ function App() {
   useEffect(() => {
      fetch('http://localhost:8000/api/config')
        .then(res => res.json())
-       .then(data => { if (data.casings) setBhaConfig(data); })
+       .then(data => { if (data && typeof data === 'object') setBhaConfig((prev) => ({ ...prev, ...data })); })
        .catch(err => console.log(err));
   }, []);
 
@@ -714,10 +890,27 @@ function App() {
         if (timeRange === '24h') url = 'http://localhost:8000/api/history?hours=24';
 
         const response = await fetch(url);
+        
+        const addRheo = (item) => {
+             if(!item) return item;
+             const t600 = item.theta_600 || 60;
+             const t300 = item.theta_300 || 40;
+             const t3 = item.theta_3 || 5;
+             let n = 0.5;
+             const num = Math.max(0.1, t600 - t3);
+             const den = Math.max(0.1, t300 - t3);
+             if (den > 0) n = 3.321928 * Math.log10(num / den);
+             n = Math.max(0.1, Math.min(0.99, n));
+             item.tau0_si = t3 * 0.4788;
+             item.K_si = ((t300 - t3) / Math.pow(511, n)) * 0.4788 * Math.pow(1.703, n);
+             return item;
+        };
+
         const jsonList = await response.json();
         
         if (jsonList && jsonList.length > 0) {
           const processedList = jsonList.map(item => {
+             addRheo(item);
              const timeStr = item.Timestamp ? item.Timestamp.split(' ')[1] : '';
              const displayTime = ['1h', '24h', '30m'].includes(timeRange) ? timeStr.substring(0, 5) : timeStr;
              
@@ -793,7 +986,7 @@ function App() {
         </div>
       </header>
 
-      {/* SETTINGS PLACARD */}
+      {/* Toolbar: BHA modal trigger, twin scenario buttons (preview only), unit pickers */}
       <div className="settings-bar">
          <div className="lang-toggle">
             <button className="lang-btn" style={{ background: 'rgba(56, 189, 248, 0.2)', color: 'var(--accent-color)', padding: '0.4rem 1rem' }} onClick={() => setShowBHAConfig(true)}>
@@ -806,10 +999,10 @@ function App() {
                 🎛️ {lang === 'TR' ? 'Değiştir' : 'Change'}
              </div>
              <div style={{ display: 'flex', background: 'rgba(0,0,0,0.3)', border: '1px solid var(--panel-border)', borderRadius: '6px', overflow: 'hidden' }}>
-                 <button className="change-btn" onClick={() => { setActiveChangeParam('density'); setChangeInputUnit('SG'); }}>{lang === 'TR' ? 'Yoğunluk' : 'Density'}</button>
-                 <button className="change-btn" onClick={() => { setActiveChangeParam('yp'); setChangeInputUnit('lbf/100ft²'); }}>{lang === 'TR' ? 'YP' : 'YP'}</button>
-                 <button className="change-btn" onClick={() => { setActiveChangeParam('nozzle'); setChangeInputUnit('/32'); }}>{lang === 'TR' ? 'Nozzle' : 'Nozzle'}</button>
-                 <button className="change-btn" onClick={() => { setActiveChangeParam('flow'); setChangeInputUnit('lpm'); }}>{lang === 'TR' ? 'Akış' : 'Flow'}</button>
+                 <button className="change-btn" onClick={() => { setActiveChangeParam('density'); }}>{lang === 'TR' ? 'Yoğunluk' : 'Density'}</button>
+                 <button className="change-btn" onClick={() => { setActiveChangeParam('rheology'); }}>{lang === 'TR' ? 'Reoloji' : 'Rheology'}</button>
+                 <button className="change-btn" onClick={() => { setActiveChangeParam('nozzle'); }}>{lang === 'TR' ? 'Nozzle' : 'Nozzle'}</button>
+                 <button className="change-btn" onClick={() => { setActiveChangeParam('flow'); }}>{lang === 'TR' ? 'Akış' : 'Flow'}</button>
              </div>
          </div>
 
@@ -917,6 +1110,8 @@ function App() {
             <PumpCard 
               sensor={topSensors[3]} t={t}
               pressureUnit={units.pressure}
+              maxPressurePsi={maxPumpPressurePsi}
+              setMaxPressurePsi={setMaxPumpPressurePsi}
               value={globalLatest ? parseFloat(convertValue(globalLatest[topSensors[3].id], topSensors[3].type, units).toFixed(2)) : undefined} 
               onClick={() => { setSelectedSensor(topSensors[3]); setTimeRange('live'); }}
             />
@@ -932,17 +1127,23 @@ function App() {
                 previousValue={globalPrev ? globalPrev[bottomSensors[0].id] : undefined}
                 bhaConfig={bhaConfig}
                 latest={globalLatest}
+                tankDim={tankDim}
+                setTankDim={setTankDim}
+                tankDimUnit={tankDimUnit}
+                setTankDimUnit={setTankDimUnit}
+                tankVolUnit={tankVolUnit}
+                setTankVolUnit={setTankVolUnit}
                 onClick={() => { setSelectedSensor(bottomSensors[0]); setTimeRange('live'); }}
              />
          )}
-         {bottomSensors[1] && (
-            <SensorCard 
-              sensor={bottomSensors[1]} t={t}
-              value={globalLatest ? parseFloat(convertValue(globalLatest[bottomSensors[1].id], bottomSensors[1].type, units).toFixed(2)) : undefined} 
-              previousValue={globalPrev ? parseFloat(convertValue(globalPrev[bottomSensors[1].id], bottomSensors[1].type, units).toFixed(2)) : undefined}
-              onClick={() => { setSelectedSensor(bottomSensors[1]); setTimeRange('live'); }}
-            />
-         )}
+         <RheologyCard 
+             group={propertiesGroup} 
+             t={t}
+             units={units}
+             latest={globalLatest}
+             previous={globalPrev}
+             onClick={() => { setSelectedSensor(propertiesGroup); setActiveRheologyTab(0); setTimeRange('live'); }}
+         />
          <RheologyCard 
              group={rheologyGroup} 
              t={t}
@@ -1030,84 +1231,25 @@ function App() {
         );
       })()}
 
-      {/* DIGITAL TWIN CONTROL MODAL */}
-      {activeChangeParam && (() => {
-        let title = '';
-        let unitOptions = [];
-        if (activeChangeParam === 'density') { title = lang==='TR' ? 'Hedef Yoğunluk Belirle' : 'Set Target Density'; unitOptions = ['SG', 'lb/gal', 'lb/ft³']; }
-        if (activeChangeParam === 'yp') { title = lang==='TR' ? 'Etkin Akma Sınırı Belirle' : 'Set Target YP'; unitOptions = ['lbf/100ft²', 'Pa']; }
-        if (activeChangeParam === 'nozzle') { title = lang==='TR' ? 'Nozzle Boyutu Değiştir' : 'Change Nozzle Size'; unitOptions = ['/32']; }
-        if (activeChangeParam === 'flow') { title = lang==='TR' ? 'Akış Hızı Belirle' : 'Set Flow Rate'; unitOptions = ['lpm', 'gpm']; }
+      {/* What-if hydraulics: no POST; remount per `key` when `activeChangeParam` changes */}
+      {activeChangeParam && (
+        <DigitalTwinPanel
+          key={activeChangeParam}
+          activeChangeParam={activeChangeParam}
+          onClose={() => setActiveChangeParam(null)}
+          t={t}
+          units={units}
+          globalLatest={globalLatest}
+          bhaConfig={bhaConfig}
+          tankDim={tankDim}
+          tankDimUnit={tankDimUnit}
+          tankVolUnit={tankVolUnit}
+          maxPumpPressurePsi={maxPumpPressurePsi}
+          toDisplayPressure={(psi) => parseFloat(convertValue(psi, 'pressure', units).toFixed(1))}
+        />
+      )}
 
-        const applyTarget = () => {
-            let val = Number(changeInputValue);
-            if (activeChangeParam === 'density') {
-                if (changeInputUnit === 'lb/gal') val = val / 8.345;
-                if (changeInputUnit === 'lb/ft³') val = val / 62.43;
-                bhaConfig.target_density = val;
-            } else if (activeChangeParam === 'yp') {
-                // Sim YP is basically lbf/100ft2 mapping
-                if (changeInputUnit === 'Pa') val = val * 0.020885;
-                bhaConfig.target_yp = val;
-            } else if (activeChangeParam === 'flow') {
-                if (changeInputUnit === 'gpm') val = val * 3.78541; // gpm to lpm
-                bhaConfig.target_flow_rate = val;
-            } else if (activeChangeParam === 'nozzle') {
-                bhaConfig.bit_nozzle_size = val;
-            }
-
-            fetch('http://localhost:8000/api/config', { 
-               method: 'POST', 
-               headers: {'Content-Type': 'application/json'},
-               body: JSON.stringify(bhaConfig)
-            }).then(() => {
-               setBhaConfig({...bhaConfig});
-               setActiveChangeParam(null);
-               setChangeInputValue('');
-            });
-        };
-
-        const resetTarget = () => {
-            if (activeChangeParam === 'density') bhaConfig.target_density = null;
-            if (activeChangeParam === 'yp') bhaConfig.target_yp = null;
-            if (activeChangeParam === 'flow') bhaConfig.target_flow_rate = null;
-            fetch('http://localhost:8000/api/config', { 
-               method: 'POST', 
-               headers: {'Content-Type': 'application/json'},
-               body: JSON.stringify(bhaConfig)
-            }).then(() => { setActiveChangeParam(null); setChangeInputValue(''); });
-        };
-
-        return (
-        <div className="modal-overlay" onClick={(e) => { if (e.target.classList.contains('modal-overlay')) setActiveChangeParam(null); }}>
-             <div className="modal-content" style={{ maxWidth: '450px', padding: '2rem', textAlign: 'center' }}>
-                 <h2 style={{ marginBottom: '1rem', color: 'var(--warning)' }}>🎛️ {title}</h2>
-                 <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '1.5rem' }}>
-                    {lang === 'TR' ? 'Simülasyon motoru yazdığınız bu rakamı ana hedef noktası (target) olarak kabul edecek ve o noktaya sabitlenecektir.' : 'The simulation engine will gravitate towards and lock onto this new defined target parameter.'}
-                 </p>
-                 <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', marginBottom: '2rem' }}>
-                     <input type="number" step="0.1" value={changeInputValue} onChange={(e) => setChangeInputValue(e.target.value)} style={{ flex: 2, padding: '0.8rem', borderRadius: '4px', background: 'var(--bg-dark)', border: '1px solid var(--panel-border)', color: '#fff', fontSize: '1.2rem', textAlign: 'center' }} placeholder={lang==='TR'?'Değer / Value':"Value"} />
-                     <select value={changeInputUnit} onChange={(e) => setChangeInputUnit(e.target.value)} style={{ flex: 1, padding: '0.8rem', borderRadius: '4px', background: 'var(--bg-dark)', border: '1px solid var(--panel-border)', color: 'var(--accent-color)', fontSize: '1rem', cursor: 'pointer' }}>
-                         {unitOptions.map(u => <option key={u} value={u}>{u}</option>)}
-                     </select>
-                 </div>
-                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                     {activeChangeParam !== 'nozzle' ? (
-                        <button onClick={resetTarget} style={{ background: 'transparent', border: '1px solid var(--danger)', color: 'var(--danger)', padding: '0.6rem 1.2rem', borderRadius: '4px', cursor: 'pointer', fontSize:'0.85rem' }}>
-                            ✖ {lang === 'TR' ? 'Otomatik Moda Dön' : 'Reset & Auto'}
-                        </button>
-                     ) : <div></div>}
-                     <div style={{ display: 'flex', gap: '0.5rem' }}>
-                         <button onClick={() => setActiveChangeParam(null)} style={{ background: 'transparent', border: '1px solid var(--text-secondary)', color: 'var(--text-secondary)', padding: '0.6rem 1.2rem', borderRadius: '4px', cursor: 'pointer', fontSize:'0.85rem' }}>İptal</button>
-                         <button onClick={applyTarget} style={{ background: 'var(--warning)', border: 'none', color: '#000', padding: '0.6rem 1.2rem', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold', fontSize:'0.85rem' }}>Uygula</button>
-                     </div>
-                 </div>
-             </div>
-        </div>
-        );
-      })()}
-
-      {/* BHA & WELLBORE CONFIG MODAL */}
+      {/* Persisted well design: POST /api/config on Save (simulator reads sim_config) */}
       {showBHAConfig && (() => {
         let parsedCasings = [];
         try { parsedCasings = JSON.parse(bhaConfig.casings); } catch { parsedCasings = []; }
@@ -1149,8 +1291,8 @@ function App() {
                 </div>
              </div>
 
-             <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '1.5rem', marginBottom: '1.5rem', borderBottom: '1px solid var(--panel-border)', paddingBottom: '1.5rem' }}>
-                <div style={{ background: 'rgba(0,0,0,0.2)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--panel-border)' }}>
+             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: '1.5rem', marginBottom: '1.5rem', borderBottom: '1px solid var(--panel-border)', paddingBottom: '1.5rem', alignItems: 'start' }}>
+                <div style={{ minWidth: 0, background: 'rgba(0,0,0,0.2)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--panel-border)' }}>
                     <h4 style={{ color: 'var(--accent-color)', marginBottom: '0.8rem', display: 'flex', justifyContent: 'space-between' }}>
                         {lang === 'TR' ? 'Muhafaza Borusu (Casing) Profili' : 'Casing Profile'}
                         <button onClick={addCasing} style={{ background: 'transparent', border:'1px solid var(--accent-color)', color: 'var(--accent-color)', borderRadius: '4px', cursor: 'pointer', fontSize: '0.75rem', padding: '0.1rem 0.5rem' }}>+ {lang === 'TR' ? 'Ekle' : 'Add'}</button>
@@ -1177,8 +1319,8 @@ function App() {
                     </div>
                 </div>
 
-                <div style={{ background: 'rgba(0,0,0,0.2)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--panel-border)', display: 'grid', gridTemplateColumns: '1fr', gap: '1rem' }}>
-                    <div style={{gridColumn: '1'}}>
+                <div style={{ minWidth: 0, background: 'rgba(0,0,0,0.2)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--panel-border)', display: 'grid', gridTemplateColumns: '1fr', gap: '1rem' }}>
+                    <div style={{ gridColumn: '1' }}>
                         <h4 style={{ color: 'var(--success)', marginBottom: '0.8rem' }}>Drill Pipe (DP)</h4>
                         <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{lang === 'TR' ? 'NOT: Drill Pipe uzunluğu, Anlık Kuyu Derinliği (Current Depth) tespiti yapılarak otomatik hesaplanmaktadır.' : 'NOTE: Drill Pipe length is calculated automatically based on continuous Current Depth tracking.'}</span>
                     </div>
