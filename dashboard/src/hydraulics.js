@@ -73,23 +73,28 @@ function holeIdAtMd(mdNative, casings, bitDiameterIn) {
 function pipeGeometryAtMd(mdNative, depthNative, cfg) {
   const dc1L = Number(cfg.dc1_length) || 0;
   const dc2L = Number(cfg.dc2_length) || 0;
+  const hwdpL = Number(cfg.hwdp_length) || 0;
   const dpOd = Number(cfg.dp1_od) || 0;
   const dc1Od = Number(cfg.dc1_od) || 0;
   const dc2Od = Number(cfg.dc2_od) || 0;
+  const hwdpOd = Number(cfg.hwdp_od) || 0;
   const dpId = Number(cfg.dp1_id) || 0;
   const dc1Id = Number(cfg.dc1_id) || 0;
   const dc2Id = Number(cfg.dc2_id) || 0;
+  const hwdpId = Number(cfg.hwdp_id) || 0;
 
   if (depthNative <= 0) return { od: dpOd, innerId: dpId };
   const topDc2 = depthNative - dc2L;
   const topDc1 = depthNative - dc2L - dc1L;
+  const topHwdp = depthNative - dc2L - dc1L - hwdpL;
 
   if (dc2L > 0 && dc2Od > 0 && mdNative > topDc2) return { od: dc2Od, innerId: dc2Id };
   if (dc1L > 0 && dc1Od > 0 && mdNative > topDc1) return { od: dc1Od, innerId: dc1Id };
+  if (hwdpL > 0 && hwdpOd > 0 && mdNative > topHwdp) return { od: hwdpOd, innerId: hwdpId };
   return { od: dpOd, innerId: dpId };
 }
 
-function collectBreakpoints(depthNative, casings, bhaLen, dc1L, dc2L) {
+function collectBreakpoints(depthNative, casings, bhaLen, dc1L, dc2L, hwdpL) {
   const b = new Set([0, depthNative]);
   for (const row of casings) {
     const s = Number(row.start);
@@ -102,8 +107,9 @@ function collectBreakpoints(depthNative, casings, bhaLen, dc1L, dc2L) {
   }
   const topDc2 = depthNative - dc2L;
   const topDc1 = depthNative - dc2L - dc1L;
+  const topHwdp = depthNative - dc2L - dc1L - (hwdpL || 0);
   const topBha = depthNative - bhaLen;
-  [topDc2, topDc1, topBha].forEach((x) => {
+  [topDc2, topDc1, topHwdp, topBha].forEach((x) => {
     if (x > 0 && x < depthNative) b.add(x);
   });
   return [...b].sort((a, b2) => a - b2);
@@ -160,17 +166,19 @@ export function computeHydraulicsPsi(p) {
 
   const dc1L = Number(config.dc1_length) || 0;
   const dc2L = Number(config.dc2_length) || 0;
-  const bhaLen = dc1L + dc2L;
+  const hwdpL = Number(config.hwdp_length) || 0;
+  const bhaLen = dc1L + dc2L + hwdpL;
   const dynDpL = Math.max(0, depthNative - bhaLen);
 
   let pipe_pd_pa = 0;
   pipe_pd_pa += calc_pd_pipe_si(dynDpL, Number(config.dp1_id) || 0);
+  pipe_pd_pa += calc_pd_pipe_si(hwdpL, Number(config.hwdp_id) || 0);
   pipe_pd_pa += calc_pd_pipe_si(dc1L, Number(config.dc1_id) || 0);
   pipe_pd_pa += calc_pd_pipe_si(dc2L, Number(config.dc2_id) || 0);
 
   const bitD = Number(config.bit_diameter) || 8.5;
   const casings = parseCasings(config);
-  const bps = collectBreakpoints(depthNative, casings, bhaLen, dc1L, dc2L);
+  const bps = collectBreakpoints(depthNative, casings, bhaLen, dc1L, dc2L, hwdpL);
   let annulus_open_pa = 0;
   let annulus_cased_pa = 0;
   for (let i = 0; i < bps.length - 1; i++) {
@@ -235,7 +243,8 @@ export function computeSystemVolumeM3(depthM, config) {
 
   const dc1L = Number(config.dc1_length) || 0;
   const dc2L = Number(config.dc2_length) || 0;
-  const bhaLen = dc1L + dc2L;
+  const hwdpL = Number(config.hwdp_length) || 0;
+  const bhaLen = dc1L + dc2L + hwdpL;
   const dynDpL = Math.max(0, depthNative - bhaLen);
 
   const addPipeVol = (lenNat, idIn) => {
@@ -245,12 +254,13 @@ export function computeSystemVolumeM3(depthM, config) {
     vol += Math.PI * r * r * L;
   };
   addPipeVol(dynDpL, Number(config.dp1_id) || 0);
+  addPipeVol(hwdpL, Number(config.hwdp_id) || 0);
   addPipeVol(dc1L, Number(config.dc1_id) || 0);
   addPipeVol(dc2L, Number(config.dc2_id) || 0);
 
   const bitD = Number(config.bit_diameter) || 8.5;
   const casings = parseCasings(config);
-  const bps = collectBreakpoints(depthNative, casings, bhaLen, dc1L, dc2L);
+  const bps = collectBreakpoints(depthNative, casings, bhaLen, dc1L, dc2L, hwdpL);
   for (let i = 0; i < bps.length - 1; i++) {
     const md0 = bps[i];
     const md1 = bps[i + 1];

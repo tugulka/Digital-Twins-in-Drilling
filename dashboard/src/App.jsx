@@ -79,7 +79,7 @@ const DICTIONARY = {
     alarm_thresh_influx: "Influx Eşiği",
     alarm_thresh_loss: "Kaçak Eşiği",
     alarm_dev: "sapma",
-    twin_note: "Önizleme — sunucuya yazılmaz.",
+    twin_note: "",
     twin_density_title: "Yoğunluğu değiştir (önizleme)",
     twin_rheo_title: "Reoloji (önizleme)",
     twin_nozzle_title: "Nozzle (önizleme)",
@@ -162,7 +162,7 @@ twin_target_n: "Hedef n",
     alarm_thresh_influx: "Influx Threshold",
     alarm_thresh_loss: "Loss Threshold",
     alarm_dev: "deviation",
-    twin_note: "Preview only — nothing is sent to the server.",
+    twin_note: "",
     twin_density_title: "Change density (preview)",
     twin_rheo_title: "Rheology (preview)",
     twin_nozzle_title: "Nozzle (preview)",
@@ -366,7 +366,7 @@ function RheologyCard({ group, latest, previous, onClick, t, units }) {
 /**
  * Mud pit % with visual tank, pit geometry + volume unit settings, and pit gain/loss heuristics.
  * Maintains a short ring buffer of level samples to estimate dV/dt, compares to theoretical
- * rock displacement from ROP × bit area for optional influx / loss alarms (see effects below).
+ * cuttings displacement from ROP × bit area for optional influx / loss alarms (see effects below).
  */
 function TankCard({ sensor, value, previousValue, bhaConfig, latest, onClick, t, tankDim, setTankDim, tankDimUnit, setTankDimUnit, tankVolUnit, setTankVolUnit }) {
   // --- UI States ---
@@ -460,7 +460,7 @@ function TankCard({ sensor, value, previousValue, bhaConfig, latest, onClick, t,
   }
 
   // --- Physics Correlation Engine ---
-  // The system checks if the tank volume flux matches rock displacement (Drilled Volume).
+  // The system checks if the tank volume flux matches cuttings displacement (Drilled Volume).
   // Formula: D_hole = ROP * Area of Bit. 
   useEffect(() => {
       // Ensure we have active drilling velocity and dimensional metrics
@@ -474,12 +474,12 @@ function TankCard({ sensor, value, previousValue, bhaConfig, latest, onClick, t,
       const hole_area_m2 = Math.PI * Math.pow(bit_radius_m, 2);
       
       // Calculate Expected Volumetric Flow (in m^3/h)
-      // Since drilling naturally displaces soil, the Mud Pit fundamentally LOSES mud 
+      // Since drilling naturally displaces soil/cuttings, the Mud Pit fundamentally LOSES mud 
       // equal to the magnitude of the hole generated (Expected Negative Value).
-      const expectedRockLoss_m3_h = -(rop_m_h * hole_area_m2);
+      const expectedCuttingsLoss_m3_h = -(rop_m_h * hole_area_m2);
       
       // Cast the M^3 result into the specific active volume unit (bbl, gal) to maintain 1:1 scale mathematically
-      const expectedDisplacementUnit_h = volFromM3(expectedRockLoss_m3_h, volUnit);
+      const expectedDisplacementUnit_h = volFromM3(expectedCuttingsLoss_m3_h, volUnit);
       
       // Real rate vs expected loss
       const difference = currentRate - expectedDisplacementUnit_h;
@@ -731,15 +731,17 @@ function App() {
 
   const [showBHAConfig, setShowBHAConfig] = useState(false);
   const [bhaConfig, setBhaConfig] = useState({
-      casings: '[{"start": 0, "end": 3000, "id": 8.5}]',
+      casings: '[{"start": 0, "end": 50, "id": 18.936}, {"start": 0, "end": 250, "id": 12.615}]',
       length_unit: 'm',
-      bit_diameter: 6.0, bit_nozzle_size: 12, bit_nozzle_qty: 3,
-      dp1_id: 3.826, dp1_od: 4.5, dp1_length: 1500,
+      bit_diameter: 12.25, bit_nozzle_size: 12, bit_nozzle_qty: 3,
+      dp1_id: 2.602, dp1_od: 3.5, dp1_length: 1500,
       dp2_id: 0, dp2_od: 0, dp2_length: 0,
-      dc1_id: 2.50, dc1_od: 4.75, dc1_length: 200,
-      dc2_id: 0, dc2_od: 0, dc2_length: 0,
+      hwdp_id: 3.0, hwdp_od: 5.0, hwdp_length: 18.78,
+      dc1_id: 2.813, dc1_od: 8.0, dc1_length: 72.0,
+      dc2_id: 2.813, dc2_od: 5.0, dc2_length: 36.0,
       target_density: null, target_k: null, target_n: null, target_flow_rate: null
   });
+  const [tempBhaConfig, setTempBhaConfig] = useState(null);
 
   // Digital Twin Control State
   const [activeChangeParam, setActiveChangeParam] = useState(null); // 'density', 'yp', 'nozzle', 'flow'
@@ -989,7 +991,7 @@ function App() {
       {/* Toolbar: BHA modal trigger, twin scenario buttons (preview only), unit pickers */}
       <div className="settings-bar">
          <div className="lang-toggle">
-            <button className="lang-btn" style={{ background: 'rgba(56, 189, 248, 0.2)', color: 'var(--accent-color)', padding: '0.4rem 1rem' }} onClick={() => setShowBHAConfig(true)}>
+            <button className="lang-btn" style={{ background: 'rgba(56, 189, 248, 0.2)', color: 'var(--accent-color)', padding: '0.4rem 1rem' }} onClick={() => { setTempBhaConfig(JSON.parse(JSON.stringify(bhaConfig))); setShowBHAConfig(true); }}>
                🛢️ {lang === 'TR' ? 'Kuyu Teçhizatı & Sondaj Dizisi' : 'Wellbore & BHA'}
             </button>
          </div>
@@ -1250,30 +1252,30 @@ function App() {
       )}
 
       {/* Persisted well design: POST /api/config on Save (simulator reads sim_config) */}
-      {showBHAConfig && (() => {
+      {showBHAConfig && tempBhaConfig && (() => {
         let parsedCasings = [];
-        try { parsedCasings = JSON.parse(bhaConfig.casings); } catch { parsedCasings = []; }
+        try { parsedCasings = JSON.parse(tempBhaConfig.casings); } catch { parsedCasings = []; }
         if (!Array.isArray(parsedCasings)) parsedCasings = [];
 
         const updateCasing = (idx, field, val) => {
            let copy = [...parsedCasings];
            copy[idx][field] = Number(val);
-           setBhaConfig({...bhaConfig, casings: JSON.stringify(copy)});
+           setTempBhaConfig({...tempBhaConfig, casings: JSON.stringify(copy)});
         };
         const removeCasing = (idx) => {
            let copy = [...parsedCasings];
            copy.splice(idx, 1);
-           setBhaConfig({...bhaConfig, casings: JSON.stringify(copy)});
+           setTempBhaConfig({...tempBhaConfig, casings: JSON.stringify(copy)});
         };
         const addCasing = () => {
            let copy = [...parsedCasings];
            copy.push({start: 0, end: 0, id: 0});
-           setBhaConfig({...bhaConfig, casings: JSON.stringify(copy)});
+           setTempBhaConfig({...tempBhaConfig, casings: JSON.stringify(copy)});
         };
 
         return (
-        <div className="modal-overlay" onClick={(e) => { if(e.target.classList.contains('modal-overlay')) setShowBHAConfig(false); }}>
-          <div className="modal-content" style={{ maxWidth: '800px', padding: '1.5rem', maxHeight: '90vh', overflowY: 'auto' }}>
+        <div className="modal-overlay" onClick={(e) => { if(e.target.classList.contains('modal-overlay')) { setShowBHAConfig(false); setTempBhaConfig(null); } }}>
+          <div className="modal-content" style={{ maxWidth: '850px', padding: '1.5rem', maxHeight: '90vh', overflowY: 'auto' }}>
              <div className="modal-header" style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <div>
                    <h2>🛢️ {lang === 'TR' ? 'Kuyu Teçhizatı & Sondaj Dizisi' : 'Wellbore & BHA Configuration'}</h2>
@@ -1284,111 +1286,140 @@ function App() {
                 
                 <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                     <div style={{ display: 'flex', background: 'rgba(0,0,0,0.3)', borderRadius: '4px', overflow: 'hidden', border: '1px solid var(--panel-border)' }}>
-                        <button onClick={() => setBhaConfig({...bhaConfig, length_unit: 'm'})} style={{ padding: '0.3rem 0.6rem', border: 'none', background: bhaConfig.length_unit === 'm' ? 'var(--accent-color)' : 'transparent', color: bhaConfig.length_unit === 'm' ? '#000' : 'var(--text-secondary)', cursor: 'pointer', fontWeight: 'bold' }}>Meter (m)</button>
-                        <button onClick={() => setBhaConfig({...bhaConfig, length_unit: 'ft'})} style={{ padding: '0.3rem 0.6rem', border: 'none', background: bhaConfig.length_unit === 'ft' ? 'var(--accent-color)' : 'transparent', color: bhaConfig.length_unit === 'ft' ? '#000' : 'var(--text-secondary)', cursor: 'pointer', fontWeight: 'bold' }}>Feet (ft)</button>
+                        <button onClick={() => setTempBhaConfig({...tempBhaConfig, length_unit: 'm'})} style={{ padding: '0.3rem 0.6rem', border: 'none', background: tempBhaConfig.length_unit === 'm' ? 'var(--accent-color)' : 'transparent', color: tempBhaConfig.length_unit === 'm' ? '#000' : 'var(--text-secondary)', cursor: 'pointer', fontWeight: 'bold' }}>Meter (m)</button>
+                        <button onClick={() => setTempBhaConfig({...tempBhaConfig, length_unit: 'ft'})} style={{ padding: '0.3rem 0.6rem', border: 'none', background: tempBhaConfig.length_unit === 'ft' ? 'var(--accent-color)' : 'transparent', color: tempBhaConfig.length_unit === 'ft' ? '#000' : 'var(--text-secondary)', cursor: 'pointer', fontWeight: 'bold' }}>Feet (ft)</button>
                     </div>
-                    <button className="modal-close" style={{ position: 'relative', top: 0, right: 0 }} onClick={() => setShowBHAConfig(false)}>{t.close}</button>
+                    <button className="modal-close" style={{ position: 'relative', top: 0, right: 0 }} onClick={() => { setShowBHAConfig(false); setTempBhaConfig(null); }}>{t.close}</button>
                 </div>
              </div>
 
-             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: '1.5rem', marginBottom: '1.5rem', borderBottom: '1px solid var(--panel-border)', paddingBottom: '1.5rem', alignItems: 'start' }}>
-                <div style={{ minWidth: 0, background: 'rgba(0,0,0,0.2)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--panel-border)' }}>
-                    <h4 style={{ color: 'var(--accent-color)', marginBottom: '0.8rem', display: 'flex', justifyContent: 'space-between' }}>
-                        {lang === 'TR' ? 'Muhafaza Borusu (Casing) Profili' : 'Casing Profile'}
-                        <button onClick={addCasing} style={{ background: 'transparent', border:'1px solid var(--accent-color)', color: 'var(--accent-color)', borderRadius: '4px', cursor: 'pointer', fontSize: '0.75rem', padding: '0.1rem 0.5rem' }}>+ {lang === 'TR' ? 'Ekle' : 'Add'}</button>
-                    </h4>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                       {parsedCasings.map((c, i) => (
-                          <div key={i} style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', background: 'var(--bg-dark)', padding: '0.5rem', borderRadius: '4px' }}>
-                             <div style={{ flex: 1 }}>
-                                 <label style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'block' }}>{lang === 'TR' ? 'Başlangıç' : 'Start'} ({bhaConfig.length_unit})</label>
-                                 <input type="number" step="10" value={c.start} onChange={e => updateCasing(i, 'start', e.target.value)} style={{ width: '100%', padding: '0.3rem', borderRadius: '4px', background: 'transparent', border: '1px solid var(--panel-border)', color: '#fff', fontSize: '0.8rem' }} />
-                             </div>
-                             <div style={{ flex: 1 }}>
-                                 <label style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'block' }}>{lang === 'TR' ? 'Bitiş' : 'End'} ({bhaConfig.length_unit})</label>
-                                 <input type="number" step="10" value={c.end} onChange={e => updateCasing(i, 'end', e.target.value)} style={{ width: '100%', padding: '0.3rem', borderRadius: '4px', background: 'transparent', border: '1px solid var(--panel-border)', color: '#fff', fontSize: '0.8rem' }} />
-                             </div>
-                             <div style={{ flex: 1 }}>
-                                 <label style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'block' }}>{lang === 'TR' ? 'Boru' : 'Pipe'} ID (in)</label>
-                                 <input type="number" step="0.1" value={c.id} onChange={e => updateCasing(i, 'id', e.target.value)} style={{ width: '100%', padding: '0.3rem', borderRadius: '4px', background: 'transparent', border: '1px solid var(--panel-border)', color: '#fff', fontSize: '0.8rem' }} />
-                             </div>
-                             <button onClick={() => removeCasing(i)} style={{ background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', alignSelf: 'flex-end', marginBottom: '0.3rem' }} title={lang === 'TR' ? 'Sil' : 'Delete'}>✕</button>
-                          </div>
-                       ))}
-                       {parsedCasings.length === 0 && <span style={{fontSize:'0.8rem', color:'var(--text-secondary)'}}>{lang === 'TR' ? 'Tanımlı muhafaza borusu yok.' : 'No casings defined.'}</span>}
-                    </div>
-                </div>
+             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.1fr) minmax(0, 0.9fr)', gap: '1.5rem', marginBottom: '1.5rem', borderBottom: '1px solid var(--panel-border)', paddingBottom: '1.5rem', alignItems: 'start' }}>
+                 {/* LEFT COLUMN: Casing Profile, Drill Bit */}
+                 <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+                     {/* Muhafaza Borusu (Casing) Profili */}
+                     <div style={{ minWidth: 0, background: 'rgba(0,0,0,0.2)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--panel-border)' }}>
+                         <h4 style={{ color: 'var(--accent-color)', marginBottom: '0.8rem', display: 'flex', justifyContent: 'space-between' }}>
+                             {lang === 'TR' ? 'Muhafaza Borusu (Casing) Profili' : 'Casing Profile'}
+                             <button onClick={addCasing} style={{ background: 'transparent', border:'1px solid var(--accent-color)', color: 'var(--accent-color)', borderRadius: '4px', cursor: 'pointer', fontSize: '0.75rem', padding: '0.1rem 0.5rem' }}>+ {lang === 'TR' ? 'Ekle' : 'Add'}</button>
+                         </h4>
+                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                            {parsedCasings.map((c, i) => (
+                               <div key={i} style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', background: 'var(--bg-dark)', padding: '0.5rem', borderRadius: '4px' }}>
+                                  <div style={{ flex: 1 }}>
+                                      <label style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'block' }}>{lang === 'TR' ? 'Başlangıç' : 'Start'} ({tempBhaConfig.length_unit})</label>
+                                      <input type="number" step="10" value={c.start} onChange={e => updateCasing(i, 'start', e.target.value)} style={{ width: '100%', padding: '0.3rem', borderRadius: '4px', background: 'transparent', border: '1px solid var(--panel-border)', color: '#fff', fontSize: '0.8rem' }} />
+                                  </div>
+                                  <div style={{ flex: 1 }}>
+                                      <label style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'block' }}>{lang === 'TR' ? 'Bitiş' : 'End'} ({tempBhaConfig.length_unit})</label>
+                                      <input type="number" step="10" value={c.end} onChange={e => updateCasing(i, 'end', e.target.value)} style={{ width: '100%', padding: '0.3rem', borderRadius: '4px', background: 'transparent', border: '1px solid var(--panel-border)', color: '#fff', fontSize: '0.8rem' }} />
+                                  </div>
+                                  <div style={{ flex: 1 }}>
+                                      <label style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'block' }}>{lang === 'TR' ? 'Boru' : 'Pipe'} ID (in)</label>
+                                      <input type="number" step="0.1" value={c.id} onChange={e => updateCasing(i, 'id', e.target.value)} style={{ width: '100%', padding: '0.3rem', borderRadius: '4px', background: 'transparent', border: '1px solid var(--panel-border)', color: '#fff', fontSize: '0.8rem' }} />
+                                  </div>
+                                  <button onClick={() => removeCasing(i)} style={{ background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', alignSelf: 'flex-end', marginBottom: '0.3rem' }} title={lang === 'TR' ? 'Sil' : 'Delete'}>✕</button>
+                               </div>
+                            ))}
+                            {parsedCasings.length === 0 && <span style={{fontSize:'0.8rem', color:'var(--text-secondary)'}}>{lang === 'TR' ? 'Tanımlı muhafaza borusu yok.' : 'No casings defined.'}</span>}
+                         </div>
+                     </div>
 
-                <div style={{ minWidth: 0, background: 'rgba(0,0,0,0.2)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--panel-border)', display: 'grid', gridTemplateColumns: '1fr', gap: '1rem' }}>
-                    <div style={{ gridColumn: '1' }}>
-                        <h4 style={{ color: 'var(--success)', marginBottom: '0.8rem' }}>Drill Pipe (DP)</h4>
-                        <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{lang === 'TR' ? 'NOT: Drill Pipe uzunluğu, Anlık Kuyu Derinliği (Current Depth) tespiti yapılarak otomatik hesaplanmaktadır.' : 'NOTE: Drill Pipe length is calculated automatically based on continuous Current Depth tracking.'}</span>
-                    </div>
-                    {/* DP-1 */}
-                    <div style={{ background: 'var(--bg-dark)', padding: '0.5rem', borderRadius: '6px' }}>
-                        <h5 style={{ color: 'var(--text-primary)', marginBottom: '0.4rem', borderBottom: '1px solid #333', paddingBottom: '0.2rem' }}>DP Segment 1 (Auto-Length)</h5>
-                        <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.8rem' }}>
-                           <div style={{ flex: 1 }}><label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>ID (in)</label> <input type="number" step="0.001" value={bhaConfig.dp1_id} onChange={e => setBhaConfig({...bhaConfig, dp1_id: Number(e.target.value)})} style={{ width:'100%', padding: '0.3rem', background: 'transparent', border: '1px solid var(--panel-border)', color: '#fff' }} /></div>
-                           <div style={{ flex: 1 }}><label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>OD (in)</label> <input type="number" step="0.001" value={bhaConfig.dp1_od} onChange={e => setBhaConfig({...bhaConfig, dp1_od: Number(e.target.value)})} style={{ width:'100%', padding: '0.3rem', background: 'transparent', border: '1px solid var(--panel-border)', color: '#fff' }} /></div>
-                        </div>
-                    </div>
-                </div>
-             </div>
+                     {/* Drill Bit (Matkap) */}
+                     <div style={{ background: 'rgba(0,0,0,0.2)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--panel-border)' }}>
+                         <h4 style={{ color: 'var(--warning)', marginBottom: '0.8rem' }}>{lang === 'TR' ? 'Matkap (Bit)' : 'Drill Bit'}</h4>
+                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                             <div>
+                                 <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '0.3rem' }}>{lang === 'TR' ? 'Çap' : 'Diameter'} (in)</label>
+                                 <input type="number" step="0.1" value={tempBhaConfig.bit_diameter} onChange={e => setTempBhaConfig({...tempBhaConfig, bit_diameter: Number(e.target.value)})} style={{ width: '100%', padding: '0.5rem', borderRadius: '4px', background: 'var(--bg-dark)', border: '1px solid var(--panel-border)', color: '#fff' }} />
+                             </div>
+                             <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                 <div style={{ flex: 1 }}>
+                                     <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '0.3rem' }}>{lang === 'TR' ? 'Nozzle Sayısı' : 'Nozzle Quantity'}</label>
+                                     <input type="number" step="1" value={tempBhaConfig.bit_nozzle_qty} onChange={e => setTempBhaConfig({...tempBhaConfig, bit_nozzle_qty: Number(e.target.value)})} style={{ width: '100%', padding: '0.5rem', borderRadius: '4px', background: 'var(--bg-dark)', border: '1px solid var(--panel-border)', color: '#fff' }} />
+                                 </div>
+                                 <div style={{ flex: 1 }}>
+                                     <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '0.3rem' }}>{lang === 'TR' ? 'Nozzle Boyutu' : 'Nozzle Size'} (/32)</label>
+                                     <input type="number" step="1" value={tempBhaConfig.bit_nozzle_size} onChange={e => setTempBhaConfig({...tempBhaConfig, bit_nozzle_size: Number(e.target.value)})} style={{ width: '100%', padding: '0.5rem', borderRadius: '4px', background: 'var(--bg-dark)', border: '1px solid var(--panel-border)', color: '#fff' }} />
+                                 </div>
+                             </div>
+                         </div>
+                     </div>
+                 </div>
 
-             <div style={{ display: 'grid', gridTemplateColumns: '2fr 1.3fr', gap: '1.5rem', marginBottom: '1.5rem' }}>
-                <div style={{ background: 'rgba(0,0,0,0.2)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--panel-border)', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                    <div style={{gridColumn: '1 / span 2'}}>
-                        <h4 style={{ color: 'var(--success)', marginBottom: '0.8rem' }}>Drill Collar (DC)</h4>
-                    </div>
-                    {/* DC-1 */}
-                    <div style={{ background: 'var(--bg-dark)', padding: '0.5rem', borderRadius: '6px' }}>
-                        <h5 style={{ color: 'var(--text-primary)', marginBottom: '0.4rem', borderBottom: '1px solid #333', paddingBottom: '0.2rem' }}>DC Segment 1</h5>
-                        <div><label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{lang === 'TR' ? 'Uzunluk' : 'Length'} ({bhaConfig.length_unit})</label> <input type="number" value={bhaConfig.dc1_length} onChange={e => setBhaConfig({...bhaConfig, dc1_length: Number(e.target.value)})} style={{ width:'100%', padding: '0.3rem', marginBottom: '0.3rem', background: 'transparent', border: '1px solid var(--panel-border)', color: '#fff' }} /></div>
-                        <div style={{ display: 'flex', gap: '0.5rem' }}>
-                           <div style={{ flex: 1 }}><label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>ID (in)</label> <input type="number" step="0.01" value={bhaConfig.dc1_id} onChange={e => setBhaConfig({...bhaConfig, dc1_id: Number(e.target.value)})} style={{ width:'100%', padding: '0.3rem', background: 'transparent', border: '1px solid var(--panel-border)', color: '#fff' }} /></div>
-                           <div style={{ flex: 1 }}><label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>OD (in)</label> <input type="number" step="0.01" value={bhaConfig.dc1_od} onChange={e => setBhaConfig({...bhaConfig, dc1_od: Number(e.target.value)})} style={{ width:'100%', padding: '0.3rem', background: 'transparent', border: '1px solid var(--panel-border)', color: '#fff' }} /></div>
-                        </div>
-                    </div>
-                    {/* DC-2 */}
-                    <div style={{ background: 'var(--bg-dark)', padding: '0.5rem', borderRadius: '6px' }}>
-                        <h5 style={{ color: 'var(--text-primary)', marginBottom: '0.4rem', borderBottom: '1px solid #333', paddingBottom: '0.2rem' }}>DC Segment 2</h5>
-                        <div><label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{lang === 'TR' ? 'Uzunluk' : 'Length'} ({bhaConfig.length_unit})</label> <input type="number" value={bhaConfig.dc2_length} onChange={e => setBhaConfig({...bhaConfig, dc2_length: Number(e.target.value)})} style={{ width:'100%', padding: '0.3rem', marginBottom: '0.3rem', background: 'transparent', border: '1px solid var(--panel-border)', color: '#fff' }} /></div>
-                        <div style={{ display: 'flex', gap: '0.5rem' }}>
-                           <div style={{ flex: 1 }}><label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>ID (in)</label> <input type="number" step="0.01" value={bhaConfig.dc2_id} onChange={e => setBhaConfig({...bhaConfig, dc2_id: Number(e.target.value)})} style={{ width:'100%', padding: '0.3rem', background: 'transparent', border: '1px solid var(--panel-border)', color: '#fff' }} /></div>
-                           <div style={{ flex: 1 }}><label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>OD (in)</label> <input type="number" step="0.01" value={bhaConfig.dc2_od} onChange={e => setBhaConfig({...bhaConfig, dc2_od: Number(e.target.value)})} style={{ width:'100%', padding: '0.3rem', background: 'transparent', border: '1px solid var(--panel-border)', color: '#fff' }} /></div>
-                        </div>
-                    </div>
-                </div>
+                 {/* RIGHT COLUMN: DP, HWDP, DC */}
+                 <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+                     {/* Drill Pipe (DP) */}
+                     <div style={{ minWidth: 0, background: 'rgba(0,0,0,0.2)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--panel-border)', display: 'grid', gridTemplateColumns: '1fr', gap: '1rem' }}>
+                         <div style={{ gridColumn: '1' }}>
+                             <h4 style={{ color: 'var(--success)', marginBottom: '0.8rem' }}>Drill Pipe (DP)</h4>
+                         </div>
+                         {/* DP-1 */}
+                         <div style={{ background: 'var(--bg-dark)', padding: '0.5rem', borderRadius: '6px' }}>
+                             <h5 style={{ color: 'var(--text-primary)', marginBottom: '0.4rem', borderBottom: '1px solid #333', paddingBottom: '0.2rem' }}>DP Segment 1 (Auto-Length)</h5>
+                             <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.8rem' }}>
+                                <div style={{ flex: 1 }}><label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>ID (in)</label> <input type="number" step="0.001" value={tempBhaConfig.dp1_id} onChange={e => setTempBhaConfig({...tempBhaConfig, dp1_id: Number(e.target.value)})} style={{ width:'100%', padding: '0.3rem', background: 'transparent', border: '1px solid var(--panel-border)', color: '#fff' }} /></div>
+                                <div style={{ flex: 1 }}><label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>OD (in)</label> <input type="number" step="0.001" value={tempBhaConfig.dp1_od} onChange={e => setTempBhaConfig({...tempBhaConfig, dp1_od: Number(e.target.value)})} style={{ width:'100%', padding: '0.3rem', background: 'transparent', border: '1px solid var(--panel-border)', color: '#fff' }} /></div>
+                             </div>
+                         </div>
+                     </div>
 
-                <div style={{ background: 'rgba(0,0,0,0.2)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--panel-border)' }}>
-                    <h4 style={{ color: 'var(--warning)', marginBottom: '0.8rem' }}>{lang === 'TR' ? 'Matkap (Bit)' : 'Drill Bit'}</h4>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                        <div>
-                            <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '0.3rem' }}>{lang === 'TR' ? 'Çap' : 'Diameter'} (in)</label>
-                            <input type="number" step="0.1" value={bhaConfig.bit_diameter} onChange={e => setBhaConfig({...bhaConfig, bit_diameter: Number(e.target.value)})} style={{ width: '100%', padding: '0.5rem', borderRadius: '4px', background: 'var(--bg-dark)', border: '1px solid var(--panel-border)', color: '#fff' }} />
-                        </div>
-                        <div style={{ display: 'flex', gap: '0.5rem' }}>
-                            <div style={{ flex: 1 }}>
-                                <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '0.3rem' }}>{lang === 'TR' ? 'Nozzle Sayısı' : 'Nozzle Quantity'}</label>
-                                <input type="number" step="1" value={bhaConfig.bit_nozzle_qty} onChange={e => setBhaConfig({...bhaConfig, bit_nozzle_qty: Number(e.target.value)})} style={{ width: '100%', padding: '0.5rem', borderRadius: '4px', background: 'var(--bg-dark)', border: '1px solid var(--panel-border)', color: '#fff' }} />
-                            </div>
-                            <div style={{ flex: 1 }}>
-                                <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '0.3rem' }}>{lang === 'TR' ? 'Nozzle Boyutu' : 'Nozzle Size'} (/32)</label>
-                                <input type="number" step="1" value={bhaConfig.bit_nozzle_size} onChange={e => setBhaConfig({...bhaConfig, bit_nozzle_size: Number(e.target.value)})} style={{ width: '100%', padding: '0.5rem', borderRadius: '4px', background: 'var(--bg-dark)', border: '1px solid var(--panel-border)', color: '#fff' }} />
-                            </div>
-                        </div>
-                    </div>
-                </div>
+                     {/* Heavy Weight Drill Pipe (HWDP) */}
+                     <div style={{ minWidth: 0, background: 'rgba(0,0,0,0.2)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--panel-border)', display: 'grid', gridTemplateColumns: '1fr', gap: '1rem' }}>
+                         <div style={{ gridColumn: '1' }}>
+                             <h4 style={{ color: 'var(--success)', marginBottom: '0.8rem' }}>Heavy Weight Drill Pipe (HWDP)</h4>
+                         </div>
+                         {/* HWDP Segment */}
+                         <div style={{ background: 'var(--bg-dark)', padding: '0.5rem', borderRadius: '6px' }}>
+                             <h5 style={{ color: 'var(--text-primary)', marginBottom: '0.4rem', borderBottom: '1px solid #333', paddingBottom: '0.2rem' }}>HWDP Segment</h5>
+                             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '0.8rem' }}>
+                                <div><label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{lang === 'TR' ? 'Uzunluk' : 'Length'} ({tempBhaConfig.length_unit})</label> <input type="number" value={tempBhaConfig.hwdp_length} onChange={e => setTempBhaConfig({...tempBhaConfig, hwdp_length: Number(e.target.value)})} style={{ width:'100%', padding: '0.3rem', background: 'transparent', border: '1px solid var(--panel-border)', color: '#fff' }} /></div>
+                                <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.2rem' }}>
+                                   <div style={{ flex: 1 }}><label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>ID (in)</label> <input type="number" step="0.01" value={tempBhaConfig.hwdp_id} onChange={e => setTempBhaConfig({...tempBhaConfig, hwdp_id: Number(e.target.value)})} style={{ width:'100%', padding: '0.3rem', background: 'transparent', border: '1px solid var(--panel-border)', color: '#fff' }} /></div>
+                                   <div style={{ flex: 1 }}><label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>OD (in)</label> <input type="number" step="0.01" value={tempBhaConfig.hwdp_od} onChange={e => setTempBhaConfig({...tempBhaConfig, hwdp_od: Number(e.target.value)})} style={{ width:'100%', padding: '0.3rem', background: 'transparent', border: '1px solid var(--panel-border)', color: '#fff' }} /></div>
+                                </div>
+                             </div>
+                         </div>
+                     </div>
+
+                     {/* Drill Collar (DC) */}
+                     <div style={{ background: 'rgba(0,0,0,0.2)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--panel-border)', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                         <div style={{gridColumn: '1 / span 2'}}>
+                             <h4 style={{ color: 'var(--success)', marginBottom: '0.8rem' }}>Drill Collar (DC)</h4>
+                         </div>
+                         {/* DC-1 */}
+                         <div style={{ background: 'var(--bg-dark)', padding: '0.5rem', borderRadius: '6px' }}>
+                             <h5 style={{ color: 'var(--text-primary)', marginBottom: '0.4rem', borderBottom: '1px solid #333', paddingBottom: '0.2rem' }}>DC Segment 1</h5>
+                             <div><label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{lang === 'TR' ? 'Uzunluk' : 'Length'} ({tempBhaConfig.length_unit})</label> <input type="number" value={tempBhaConfig.dc1_length} onChange={e => setTempBhaConfig({...tempBhaConfig, dc1_length: Number(e.target.value)})} style={{ width:'100%', padding: '0.3rem', marginBottom: '0.3rem', background: 'transparent', border: '1px solid var(--panel-border)', color: '#fff' }} /></div>
+                             <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                <div style={{ flex: 1 }}><label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>ID (in)</label> <input type="number" step="0.01" value={tempBhaConfig.dc1_id} onChange={e => setTempBhaConfig({...tempBhaConfig, dc1_id: Number(e.target.value)})} style={{ width:'100%', padding: '0.3rem', background: 'transparent', border: '1px solid var(--panel-border)', color: '#fff' }} /></div>
+                                <div style={{ flex: 1 }}><label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>OD (in)</label> <input type="number" step="0.01" value={tempBhaConfig.dc1_od} onChange={e => setTempBhaConfig({...tempBhaConfig, dc1_od: Number(e.target.value)})} style={{ width:'100%', padding: '0.3rem', background: 'transparent', border: '1px solid var(--panel-border)', color: '#fff' }} /></div>
+                             </div>
+                         </div>
+                         {/* DC-2 */}
+                         <div style={{ background: 'var(--bg-dark)', padding: '0.5rem', borderRadius: '6px' }}>
+                             <h5 style={{ color: 'var(--text-primary)', marginBottom: '0.4rem', borderBottom: '1px solid #333', paddingBottom: '0.2rem' }}>DC Segment 2</h5>
+                             <div><label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{lang === 'TR' ? 'Uzunluk' : 'Length'} ({tempBhaConfig.length_unit})</label> <input type="number" value={tempBhaConfig.dc2_length} onChange={e => setTempBhaConfig({...tempBhaConfig, dc2_length: Number(e.target.value)})} style={{ width:'100%', padding: '0.3rem', marginBottom: '0.3rem', background: 'transparent', border: '1px solid var(--panel-border)', color: '#fff' }} /></div>
+                             <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                <div style={{ flex: 1 }}><label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>ID (in)</label> <input type="number" step="0.01" value={tempBhaConfig.dc2_id} onChange={e => setTempBhaConfig({...tempBhaConfig, dc2_id: Number(e.target.value)})} style={{ width:'100%', padding: '0.3rem', background: 'transparent', border: '1px solid var(--panel-border)', color: '#fff' }} /></div>
+                                <div style={{ flex: 1 }}><label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>OD (in)</label> <input type="number" step="0.01" value={tempBhaConfig.dc2_od} onChange={e => setTempBhaConfig({...tempBhaConfig, dc2_od: Number(e.target.value)})} style={{ width:'100%', padding: '0.3rem', background: 'transparent', border: '1px solid var(--panel-border)', color: '#fff' }} /></div>
+                             </div>
+                         </div>
+                     </div>
+                 </div>
              </div>
 
              <div style={{ marginTop: '2rem', display: 'flex', justifyContent: 'flex-end', gap: '1rem' }}>
-                 <button onClick={() => setShowBHAConfig(false)} style={{ padding: '0.6rem 2rem', background: 'transparent', border: '1px solid var(--text-secondary)', color: 'var(--text-secondary)', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}>{lang === 'TR' ? 'İptal' : 'Cancel'}</button>
+                 <button onClick={() => { setShowBHAConfig(false); setTempBhaConfig(null); }} style={{ padding: '0.6rem 2rem', background: 'transparent', border: '1px solid var(--text-secondary)', color: 'var(--text-secondary)', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}>{lang === 'TR' ? 'İptal' : 'Cancel'}</button>
                  <button onClick={() => {
                      fetch('http://localhost:8000/api/config', { 
                         method: 'POST', 
                         headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify(bhaConfig)
-                     }).then(() => setShowBHAConfig(false));
+                        body: JSON.stringify(tempBhaConfig)
+                     }).then(() => {
+                         setBhaConfig(tempBhaConfig);
+                         setShowBHAConfig(false);
+                         setTempBhaConfig(null);
+                     });
                  }} style={{ padding: '0.6rem 2rem', background: 'var(--accent-color)', border: 'none', color: '#000', fontWeight: 'bold', borderRadius: '6px', cursor: 'pointer' }}>{lang === 'TR' ? 'Kaydet & Uygula' : 'Save & Apply'}</button>
              </div>
           </div>

@@ -183,8 +183,7 @@ export function DigitalTwinPanel({
     <div className="modal-overlay" onClick={(e) => { if (e.target.classList.contains('modal-overlay')) onClose(); }}>
       <div className="modal-content" style={{ maxWidth: '520px', padding: '1.5rem', textAlign: 'left' }} onClick={(e) => e.stopPropagation()}>
         <button className="modal-close" type="button" onClick={onClose}>{t.close}</button>
-        <h2 style={{ marginBottom: '0.5rem', color: 'var(--warning)' }}>🎛️ {title}</h2>
-        <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>{t.twin_note}</p>
+        <h2 style={{ marginBottom: '1rem', color: 'var(--warning)' }}>🎛️ {title}</h2>
         {/* Mode: target mud weight + weighting agent */}
         {activeChangeParam === 'density' && (
           <div style={{ marginBottom: '1rem' }}>
@@ -206,10 +205,10 @@ export function DigitalTwinPanel({
                   <span>{(totalSolidKg / 1000).toFixed(1)} Ton</span>
                 </p>
                 {agent === 'calcite' && targetSg > 1.25 && (
-                   <p style={{ marginTop: '0.5rem', color: 'var(--warning)', fontWeight: 'bold' }}>⚠️ İstediğiniz yoğunluğa ulaşamayabilirsiniz.</p>
+                   <p style={{ marginTop: '0.5rem', color: 'var(--warning)', fontWeight: 'bold' }}>{t.twin_density_limit_warn}</p>
                 )}
                 {agent === 'barite' && targetSg > 1.50 && (
-                   <p style={{ marginTop: '0.5rem', color: 'var(--warning)', fontWeight: 'bold' }}>⚠️ İstediğiniz yoğunluğa ulaşamayabilirsiniz.</p>
+                   <p style={{ marginTop: '0.5rem', color: 'var(--warning)', fontWeight: 'bold' }}>{t.twin_density_limit_warn}</p>
                 )}
               </div>
             )}
@@ -221,20 +220,38 @@ export function DigitalTwinPanel({
           <div style={{ marginBottom: '1rem', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.65rem' }}>
             {[['θ_600', t600Str, setT600Str, baseT600], ['θ_300', t300Str, setT300Str, baseT300], 
               ['θ_200', t200Str, setT200Str, baseT200], ['θ_100', t100Str, setT100Str, baseT100], 
-              ['θ_6', t6Str, setT6Str, baseT6], ['θ_3', t3Str, setT3Str, baseT3]].map(([label, val, setVal, baseVal]) => (
-              <label key={label} style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                {label}
-                <input
-                  type="number"
-                  step="0.5"
-                  min="0"
-                  value={val}
-                  onChange={(e) => setVal(e.target.value)}
-                  placeholder={`${baseVal.toFixed(1)}`}
-                  style={{ display: 'block', width: '100%', marginTop: '0.35rem', padding: '0.5rem', background: 'var(--bg-dark)', border: '1px solid var(--panel-border)', color: '#fff', borderRadius: '4px', boxSizing: 'border-box' }}
-                />
-              </label>
-            ))}
+              ['θ_6', t6Str, setT6Str, baseT6], ['θ_3', t3Str, setT3Str, baseT3]].map(([label, val, setVal, baseVal]) => {
+              const isStatic = label === 'θ_200' || label === 'θ_100';
+              const isTr = t.close && t.close.includes('Kapat');
+              const staticSuffix = isStatic ? (isTr ? ' (Statik)' : ' (Static)') : '';
+              return (
+                <label key={label} style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                  {label}{staticSuffix}
+                  <input
+                    type="number"
+                    step="0.5"
+                    min="0"
+                    value={val}
+                    onChange={(e) => setVal(e.target.value)}
+                    disabled={isStatic}
+                    placeholder={`${baseVal.toFixed(1)}`}
+                    style={{ 
+                      display: 'block', 
+                      width: '100%', 
+                      marginTop: '0.35rem', 
+                      padding: '0.5rem', 
+                      background: 'var(--bg-dark)', 
+                      border: '1px solid var(--panel-border)', 
+                      color: isStatic ? '#888' : '#fff', 
+                      borderRadius: '4px', 
+                      boxSizing: 'border-box',
+                      opacity: isStatic ? 0.6 : 1,
+                      cursor: isStatic ? 'not-allowed' : 'auto'
+                    }}
+                  />
+                </label>
+              );
+            })}
           </div>
         )}
         {/* Mode: target flow L/min */}

@@ -178,24 +178,30 @@ def _pipe_geometry_at_md(md_native, depth_native, cfg):
     """Return (OD, ID) in inches for drill string component present at md_native."""
     dc1_l = float(cfg.get("dc1_length", 0) or 0)
     dc2_l = float(cfg.get("dc2_length", 0) or 0)
+    hwdp_l = float(cfg.get("hwdp_length", 0) or 0)
     dp_od = float(cfg.get("dp1_od", 0) or 0)
     dc1_od = float(cfg.get("dc1_od", 0) or 0)
     dc2_od = float(cfg.get("dc2_od", 0) or 0)
+    hwdp_od = float(cfg.get("hwdp_od", 0) or 0)
     dp_id = float(cfg.get("dp1_id", 0) or 0)
     dc1_id = float(cfg.get("dc1_id", 0) or 0)
     dc2_id = float(cfg.get("dc2_id", 0) or 0)
+    hwdp_id = float(cfg.get("hwdp_id", 0) or 0)
     if depth_native <= 0:
         return dp_od, dp_id
     top_dc2 = depth_native - dc2_l
     top_dc1 = depth_native - dc2_l - dc1_l
+    top_hwdp = depth_native - dc2_l - dc1_l - hwdp_l
     if dc2_l > 0 and dc2_od > 0 and md_native > top_dc2:
         return dc2_od, dc2_id
     if dc1_l > 0 and dc1_od > 0 and md_native > top_dc1:
         return dc1_od, dc1_id
+    if hwdp_l > 0 and hwdp_od > 0 and md_native > top_hwdp:
+        return hwdp_od, hwdp_id
     return dp_od, dp_id
 
 
-def _collect_breakpoints(depth_native, casings, bha_len, dc1_l, dc2_l):
+def _collect_breakpoints(depth_native, casings, bha_len, dc1_l, dc2_l, hwdp_l=0.0):
     """Sorted unique MDs where hole ID or pipe OD may change (annulus integration)."""
     b = {0.0, depth_native}
     for row in casings:
@@ -211,8 +217,9 @@ def _collect_breakpoints(depth_native, casings, bha_len, dc1_l, dc2_l):
             b.add(hi)
     top_dc2 = depth_native - dc2_l
     top_dc1 = depth_native - dc2_l - dc1_l
+    top_hwdp = depth_native - dc2_l - dc1_l - hwdp_l
     top_bha = depth_native - bha_len
-    for x in (top_dc2, top_dc1, top_bha):
+    for x in (top_dc2, top_dc1, top_hwdp, top_bha):
         if 0 < x < depth_native:
             b.add(x)
     return sorted(b)
@@ -228,9 +235,10 @@ def _annulus_pressure_si(config, depth_m, q_lpm, n, tau_0_si, K_si, rho_kgm3, bi
     casings = _parse_casings(config)
     dc1_l = float(config.get("dc1_length", 0) or 0)
     dc2_l = float(config.get("dc2_length", 0) or 0)
-    bha_len = dc1_l + dc2_l
+    hwdp_l = float(config.get("hwdp_length", 0) or 0)
+    bha_len = dc1_l + dc2_l + hwdp_l
     eps = 0.01
-    bps = _collect_breakpoints(depth_native, casings, bha_len, dc1_l, dc2_l)
+    bps = _collect_breakpoints(depth_native, casings, bha_len, dc1_l, dc2_l, hwdp_l)
     total_pa = 0.0
     for i in range(len(bps) - 1):
         md0, md1 = bps[i], bps[i + 1]
@@ -267,19 +275,19 @@ class SimState:
         self.rop = 15.0
         self.mud_level = 90.0
         self.flow_rate = 2000.0
-        self.mud_temp = 45.0
+        self.mud_temp = 35.0
         
         # Rheology (semi-independent)
-        self.pv = 20.0
-        self.yp = 12.0
-        self.n_flow = 0.700
-        self.density = 1.20
-        self.theta_600 = 60.0
-        self.theta_300 = 40.0
-        self.theta_200 = 30.0
-        self.theta_100 = 20.0
-        self.theta_6 = 6.0
-        self.theta_3 = 5.0
+        self.pv = 8.0
+        self.yp = 14.0
+        self.n_flow = 0.531
+        self.density = 1.10
+        self.theta_600 = 30.0
+        self.theta_300 = 22.0
+        self.theta_200 = 18.0
+        self.theta_100 = 13.0
+        self.theta_6 = 5.0
+        self.theta_3 = 4.0
 
         # Depth tracking
         self.current_depth = None
@@ -301,6 +309,18 @@ class SimState:
                 config = dict(zip([col[0] for col in cursor.description], row))
         except Exception:
             pass
+
+        if not config:
+            config = {
+                "casings": '[{"start": 0, "end": 50, "id": 18.936}, {"start": 0, "end": 250, "id": 12.615}]',
+                "length_unit": "m",
+                "dp1_id": 2.602, "dp1_od": 3.5, "dp1_length": 1500.0,
+                "hwdp_id": 3.0, "hwdp_od": 5.0, "hwdp_length": 18.78,
+                "dc1_id": 2.813, "dc1_od": 8.0, "dc1_length": 72.0,
+                "dc2_id": 2.813, "dc2_od": 5.0, "dc2_length": 36.0,
+                "bit_diameter": 12.25, "bit_nozzle_size": 12.0, "bit_nozzle_qty": 3,
+                "target_density": None, "target_k": None, "target_n": None, "target_flow_rate": None
+            }
 
         # Helper routine: Smoothly transitions a fluid variable towards an overriding target (if specified in config).
         # Otherwise, applies a noisy random walk to imitate raw physical sensor fluctuations.
@@ -342,25 +362,28 @@ class SimState:
         self.mud_level += random.uniform(-0.02, 0.02)
         self.mud_level = max(50.0, min(100.0, self.mud_level))
         
+        prev_flow = self.flow_rate
         target_flow = config.get("target_flow_rate") if config else None
         self.flow_rate = update_val(self.flow_rate, target_flow, 1000.0, 3500.0, 25.0, 20.0)
 
-        # 2. Update Mud & Rheological properties every 15 minutes (900 seconds)
-        if now - self.last_rheo_time >= 900:
+        # Mud temperature changes every time flow rate changes
+        if self.flow_rate != prev_flow:
+            flow_deviation = self.flow_rate - 2000.0
+            target_temp = 45.0 + (flow_deviation / 100.0) * 0.15
+            self.mud_temp = update_val(self.mud_temp, target_temp, 40.0, 60.0, 0.2, 0.1)
+
+        # 2. Update Mud & Rheological properties every 3 minutes (180 seconds)
+        if now - self.last_rheo_time >= 180:
             self.last_rheo_time = now
             
-            self.mud_temp += random.uniform(-0.5, 0.5)
-            self.mud_temp = max(40.0, min(60.0, self.mud_temp))
-
-            temp_effect = (self.mud_temp - 45.0) * -0.05
-            self.pv = update_val(self.pv, None, 10.0, 35.0, 0, 0.5, extra=temp_effect)
-            self.yp = update_val(self.yp, None, 5.0, 30.0, 0.2, 0.3)
+            temp_effect = (self.mud_temp - 35.0) * -0.05
+            self.pv = update_val(self.pv, None, 5.0, 20.0, 0, 0.2, extra=temp_effect)
+            self.yp = update_val(self.yp, None, 5.0, 25.0, 0.1, 0.2)
             
             self.theta_300 = self.pv + self.yp
             self.theta_600 = self.theta_300 + self.pv
-            self.theta_200 = self.theta_300 * 0.75 + random.uniform(-1, 1)
-            self.theta_100 = self.theta_300 * 0.5 + random.uniform(-1, 1)
-            self.theta_3 = max(1.0, self.yp * 0.4 + random.uniform(-0.5, 0.5))
+            # theta_200 and theta_100 are kept static as requested
+            self.theta_3 = max(1.0, self.yp * 0.3 + random.uniform(-0.5, 0.5))
             self.theta_6 = self.theta_3 + random.uniform(0.5, 1.5)
             
             target_den = config.get("target_density") if config else None
@@ -410,15 +433,17 @@ class SimState:
             
             dc1_l = float(config.get("dc1_length") or 200)
             dc2_l = float(config.get("dc2_length") or 0)
+            hwdp_l = float(config.get("hwdp_length") or 0)
             
             # Drill Pipe (DP1) Length is governed by dynamic depth.
             # Convert current_depth (meters) to the active length unit before subtraction.
-            bha_length = dc1_l + dc2_l
+            bha_length = dc1_l + dc2_l + hwdp_l
             current_depth_in_unit = self.current_depth * (1.0 if config.get("length_unit") == "m" else 3.28084)
             dyn_dp1_l = max(0.0, current_depth_in_unit - bha_length)
 
             pipe_pd_pa = 0.0
             pipe_pd_pa += calc_pd_pipe_si(dyn_dp1_l, float(config.get("dp1_id") or 3.826))
+            pipe_pd_pa += calc_pd_pipe_si(hwdp_l, float(config.get("hwdp_id") or 0))
             pipe_pd_pa += calc_pd_pipe_si(dc1_l, float(config.get("dc1_id") or 2.50))
             pipe_pd_pa += calc_pd_pipe_si(dc2_l, float(config.get("dc2_id") or 0))
 
